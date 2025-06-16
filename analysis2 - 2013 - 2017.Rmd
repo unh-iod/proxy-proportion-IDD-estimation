@@ -1,0 +1,1812 @@
+---
+title: "analysis1"
+author: "Nate Thomas"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+all data was downloaded from https://archive.cdc.gov/www_cdc_gov/nchs/nhis/1997-2018.htm
+
+```{r}
+library(haven)
+library(tidyverse)
+library(epiR)
+library(survey)
+library(caret)
+library(pROC)
+library(broom)
+
+rm(list = ls())
+
+year <- 2013:2017
+for (yr in year){
+  print(yr)
+  if (!exists("personsx")){
+    personsx <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/personsx/personsx.sas7bdat"))
+    names(personsx) <- names(personsx) %>% str_to_upper()
+  } else {
+    tmp <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/personsx/personsx.sas7bdat"))
+    names(tmp) <- names(tmp) %>% str_to_upper()
+    personsx <- personsx %>%
+      bind_rows(tmp)
+
+  }
+  if (!exists("familyxx")){
+    familyxx <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/familyxx/familyxx.sas7bdat"))
+    names(familyxx) <- names(familyxx) %>% str_to_upper()
+  } else {
+    tmp <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/familyxx/familyxx.sas7bdat"))
+    names(tmp) <- names(tmp) %>% str_to_upper()
+    familyxx <- familyxx %>%
+      bind_rows(tmp)
+  }
+  if (!exists("funcdisb")){
+    funcdisb <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/funcdisb/funcdisb.sas7bdat"))
+    names(funcdisb) <- names(funcdisb) %>% str_to_upper()
+  } else {
+    tmp <- haven::read_sas(paste0("../Data2 - Redo to clean it up/",yr,"/funcdisb/funcdisb.sas7bdat"))
+    names(tmp) <- names(tmp) %>% str_to_upper()
+    funcdisb <- funcdisb %>%
+      bind_rows(tmp)
+  }
+
+}
+#save.image(".RData")
+
+#load(".RData")
+```
+
+# Person File:
+
+## Intellectual Disability
+LAHCC7A: What conditions or health problems cause {person} limitations? 
+  (PLAPLYLM ='1' or PSPEDEIS ='1' or PLAADL ='1' or PLAWALK='1' or PLAREMEM ='1' or PLIMANY ='1')
+LAHCA14A: What conditions or health problems cause {person} limitations? 
+  (PLAADL ='1' or PLAIADL ='1' or PLAWKNOW ='1' or PLAWKLIM ='1' or PLAWALK ='1' or PLAREMEM ='1' or PLIMANY ='1')
+
+## Developmental Disability
+LAHCC8: What conditions or health problems cause {person} limitations?
+  (PLAPLYLM ='1' or PSPEDEIS ='1' or PLAADL ='1' or PLAWALK='1' or PLAREMEM ='1' or PLIMANY ='1')
+LAHCA15: What conditions or health problems cause {person} limitations? 
+  (PLAADL ='1' or PLAIADL ='1' or PLAWKNOW ='1' or PLAWKLIM ='1' or PLAWALK ='1' or PLAREMEM ='1' or PLIMANY ='1') 
+
+## Limiation
+PLAPLYLM: {Are/Is} (* Read names below) limited in the kind or amount of play activities {he/she/they} can do because of a
+physical, mental, or emotional problem?
+PSPEDEIS: Do any of the following family members, (* Read names below) receive Special Educational or Early Intervention
+Services? 
+PLAWALK: Because of a health problem, {do you/does anyone in the family} have difficulty walking without using any special
+equipment? 
+PLAREMEM: {Are you/Is anyone in the family} LIMITED IN ANY WAY because of difficulty remembering or because {you/they}
+experience periods of confusion? 
+PLIMANY: Are {you/any family members} LIMITED IN ANY WAY in any activities because of physical, mental or emotional
+problems?
+
+## ADL
+PLAADL: Because of a physical, mental, or emotional problem, {do you/does anyone in the family} need the help of other persons
+with PERSONAL CARE NEEDS, such as eating, bathing, dressing, or getting around inside this home? 
+
+## IADL
+PLAIADL: Because of a physical, mental, or emotional problem, do {you/any of these family members (* Read named below)}
+need the help of other persons in handling ROUTINE NEEDS, such as everyday household chores, doing necessary
+business, shopping, or getting around for other purposes? 
+
+## PR
+PLAWKNOW: Does a physical, mental, or emotional problem NOW keep {you/any of these family members} from working at a job or
+business? 
+PLAWKLIM: {Are you limited in the kind OR amount of work you/Are any of these family members limited in the kind OR amount
+of work they} can do because of a physical, mental or emotional problem? 
+
+## Education
+EDUC: What is the HIGHEST level of school {person has} completed or the highest degree {person has} received? Please tell
+me the number from the card. 
+
+# Unweighted Obs
+
+```{r}
+# Intellectual Disability
+#table(personsx$LAHCC7A, personsx$SRVY_YR) %>% sum()
+#table(personsx$LAHCA14A, personsx$SRVY_YR) %>% sum()
+
+# Developmental Disability
+#table(personsx$LAHCC8, personsx$SRVY_YR)
+#table(personsx$LAHCA15, personsx$SRVY_YR)
+
+# Age
+#table(personsx$AGE_P, personsx$SRVY_YR)
+
+# PSU
+#table(is.na(personsx$PSU_P))
+# Strat
+#table(is.na(personsx$STRAT_P))
+```
+
+```{r}
+# Clean the data
+personsx_clean <- personsx %>%
+  filter(AGE_P >= 18 & AGE_P <= 64) %>%                                         # Set age group
+  mutate(id_ = ifelse((LAHCC7A == 1) | (LAHCA14A == 1), 1, NA),                 # Init ID
+         dd_ = ifelse((LAHCC8  == 1) | (LAHCA15  == 1), 1, NA)) %>%             # Init DD
+  mutate(id_ = ifelse(is.na(id_), 0, id_),                                      # Fill NA
+         dd_ = ifelse(is.na(dd_), 0, dd_),                                      # Fill NA
+         idd_= ifelse(id_ | dd_, 1, 0),                                         # Set IDD
+         PSU = ifelse(is.na(PSU_P), PPSU, PSU_P),                               # Variable name change for PSU
+         STRAT = ifelse(is.na(STRAT_P), PSTRAT, STRAT_P),                       # Variable name change for Strata
+         WTFA  = WTFA/5) %>%                                                    # Correct weights for pooled years
+  mutate(id_f  = id_  %>% as.factor(),
+         dd_f  = dd_  %>% as.factor(),
+         idd_f = idd_ %>% as.factor())
+
+sum(is.na(personsx_clean$STRAT))
+```
+
+```{r}
+svydes <- survey::svydesign(ids = ~PSU,
+                            data = personsx_clean,
+                            strata = ~STRAT,
+                            weights = ~WTFA,
+                            nest = T)
+
+id_prev <- svymean(~id_f, design = svydes)
+id_pop  <- svytotal(~id_f, design = svydes)
+
+dd_prev <- svymean(~dd_f, design = svydes)
+dd_pop  <- svytotal(~dd_f, design = svydes)
+
+idd_prev <- svymean(~idd_f, design = svydes)
+idd_pop  <- svytotal(~idd_f, design = svydes)
+```
+
+# Functioning File:
+
+## Intellectual Disability
+N/A
+
+## Developmental Disability
+N/A
+
+## Limiation
+COG_SS: Do you have difficulty remembering or concentrating? Would you say no difficulty, some difficulty, a lot of difficulty, or
+are you unable to do this?
+
+## ADL
+UB_SS: Do you have difficulty with self-care, such as washing all over or dressing? Would you say no difficulty, some difficulty,
+a lot of difficulty, or are you unable to do this? 
+
+## IADL
+N/A - 
+
+## EDUCATION
+N/A
+
+```{r}
+combined_clean <- personsx_clean %>%
+  left_join(funcdisb, by = c("HHX","FPX","FMX","SRVY_YR"))     
+
+overlap <- combined_clean %>%
+  select(contains(".x"),contains(".y"))
+
+# check if tabled overlap variables perfectly agree
+#table(overlap$RECTYPE.x,overlap$RECTYPE.y)
+#table(overlap$INTV_QRT.x,overlap$INTV_QRT.y)
+#table(overlap$INTV_MON.x,overlap$INTV_MON.y)
+#isDiagonal(table(overlap$STRAT_P.x,overlap$STRAT_P.y) %>% matrix(ncol = 300))
+#table(overlap$PSU_P.x,overlap$PSU_P.y)
+#table(overlap$FDRN_FLG.x,overlap$FDRN_FLG.y)
+#table(overlap$AFD_FLG.x,overlap$AFD_FLG.y)
+#isDiagonal(table(overlap$PSTRAT.x,overlap$PSTRAT.y) %>% matrix(ncol = 52))
+#table(overlap$PPSU.x,overlap$PPSU.y)
+
+combined_clean <- personsx_clean %>%
+  select(-WTFA) %>%
+  left_join(funcdisb %>%
+              select(-INTV_QRT,-INTV_MON,-STRAT_P,
+                     -PSU_P,-FDRN_FLG,-PSTRAT,-PPSU), 
+            by = c("HHX","FPX","FMX","SRVY_YR")) %>%
+  filter(RECTYPE.y == 38) %>%
+  mutate(cog       = ifelse(COG_SS %in% c(2:4), 1, 0),                          #  Cognitive difficulty
+         self  = ifelse(UB_SS %in% c(2:4) | PLAADL == 1,1,0),                   # ADL
+         ind = ifelse(PLAIADL == 1, 1, 0),                                      # IADL
+         lesshs    = ifelse(EDUC1 %in% c(0:12), 1, 0),                       # Less than a high school diploma | Don't know
+         WTFA_AFD  = WTFA_AFD/5) %>%
+  mutate(cog.self = ifelse(cog & self, 1, 0),
+         cog.ind = ifelse(cog & ind, 1, 0),
+         cog.self.ind = ifelse(cog & (self | ind), 1, 0),
+         cog.self.ind.lesshs = ifelse(cog & (self | ind) & lesshs, 1, 0),
+         cog.self.lesshs = ifelse(cog & self & lesshs, 1, 0),
+         cog.ind.lesshs = ifelse(cog & ind & lesshs, 1, 0),
+         ind.lesshs = ifelse(ind & lesshs, 1, 0),
+         self.ind.lesshs = ifelse((self | ind) & lesshs, 1, 0)) %>%
+  mutate(cog_f  = cog  %>% as.factor(),
+         cog.self_f = cog.self %>% as.factor(),
+         cog.ind_f = cog.ind %>% as.factor(),
+         cog.self.ind_f  = cog.self.ind  %>% as.factor(),
+         cog.self.ind.lesshs_f = cog.self.ind.lesshs %>% as.factor(),
+         cog.self.lesshs_f = cog.self.lesshs %>% as.factor(),
+         cog.ind.lesshs_f = cog.ind.lesshs %>% as.factor(),
+         ind.lesshs_f = ind.lesshs %>% as.factor(),
+         self.ind.lesshs_f = self.ind.lesshs %>% as.factor(),
+         allones = 1,
+         id_cog = paste0(id_,cog),
+         id_self = paste0(id_,self),
+         id_ind = paste0(id_,ind),
+         id_cog.self = paste0(id_,cog.self),
+         id_cog.ind = paste0(id_,cog.ind),
+         id_cog.self.ind = paste0(id_,cog.self.ind),
+         id_cog.self.ind.lesshs = paste0(id_,cog.self.ind.lesshs),
+         id_cog.self.lesshs = paste0(id_,cog.self.lesshs),
+         id_cog.ind.lesshs = paste0(id_,cog.ind.lesshs),
+         id_ind.lesshs = paste0(id_,ind.lesshs),
+         id_self.ind.lesshs = paste0(id_,self.ind.lesshs),
+         dd_cog = paste0(dd_,cog),
+         dd_self = paste0(dd_,self),
+         dd_ind = paste0(dd_,ind),
+         dd_cog.self = paste0(dd_,cog.self),
+         dd_cog.ind = paste0(dd_,cog.ind),
+         dd_cog.self.ind = paste0(dd_,cog.self.ind),
+         dd_cog.self.ind.lesshs = paste0(dd_,cog.self.ind.lesshs),
+         dd_cog.self.lesshs = paste0(dd_,cog.self.lesshs),
+         dd_cog.ind.lesshs = paste0(dd_,cog.ind.lesshs),
+         dd_ind.lesshs = paste0(dd_,ind.lesshs),
+         dd_self.ind.lesshs = paste0(dd_,self.ind.lesshs),
+         idd_cog = paste0(idd_,cog),
+         idd_self = paste0(idd_,self),
+         idd_ind = paste0(idd_,ind),
+         idd_cog.self = paste0(idd_,cog.self),
+         idd_cog.ind = paste0(idd_,cog.ind),
+         idd_cog.self.ind = paste0(idd_,cog.self.ind),
+         idd_cog.self.ind.lesshs = paste0(idd_,cog.self.ind.lesshs),
+         idd_cog.self.lesshs = paste0(idd_,cog.self.lesshs),
+         idd_cog.ind.lesshs = paste0(idd_,cog.ind.lesshs),
+         idd_ind.lesshs = paste0(idd_,ind.lesshs),
+         idd_self.ind.lesshs = paste0(idd_,self.ind.lesshs))
+
+#table(is.na(combined_clean$ind))
+#table(combined_clean$RECTYPE.y, combined_clean$SRVY_YR)
+#table(combined_clean$RECTYPE.x, combined_clean$SRVY_YR)
+#table(combined_clean$cog, combined_clean$SRVY_YR)
+#table(combined_clean$self, combined_clean$SRVY_YR)
+#table(combined_clean$ind, combined_clean$SRVY_YR)
+#table(combined_clean$lesshs, combined_clean$SRVY_YR)
+```
+
+```{r}
+svydes_proxy <- survey::svydesign(ids = ~PSU,
+                            data = combined_clean,
+                            strata = ~STRAT,
+                            weights = ~WTFA_AFD,
+                            nest = T)
+
+id_prop <- svymean(~as.factor(id_), design = svydes_proxy)
+dd_prop <- svymean(~as.factor(dd_), design = svydes_proxy)
+idd_prop <- svymean(~as.factor(idd_), design = svydes_proxy)
+
+cog_prev <- svymean(~cog_f, design = svydes_proxy)
+cog_pop  <- svytotal(~cog_f, design = svydes_proxy)
+
+cog.self_prev <- svymean(~cog.self_f, design = svydes_proxy)
+cog.self_pop  <- svytotal(~cog.self_f, design = svydes_proxy)
+
+cog.ind_prev <- svymean(~cog.ind_f, design = svydes_proxy)
+cog.ind_pop  <- svytotal(~cog.ind_f, design = svydes_proxy)
+
+cog.self.ind_prev <- svymean(~cog.self.ind_f, design = svydes_proxy)
+cog.self.ind_pop  <- svytotal(~cog.self.ind_f, design = svydes_proxy)
+
+cog.self.ind.lesshs_prev <- svymean(~cog.self.ind.lesshs_f, design = svydes_proxy)
+cog.self.ind.lesshs_pop  <- svytotal(~cog.self.ind.lesshs_f, design = svydes_proxy)
+```
+
+## ID Pop and Prevalence 
+
+```{r}
+rowfunc <- function(tab,tots,prev){
+  data.frame(
+    N11 = tab[2,2],
+    POP11 = paste0(tots[4]," (",round(SE(tots),0)[4],")"),
+    PREV11 = paste0(prev[4]*100,"% (",round(SE(prev),4)[4]*100,"%)"),
+    N10 = tab[2,1],
+    POP10 = paste0(tots[3]," (",round(SE(tots),0)[3],")"),
+    PREV10 = paste0(prev[3]*100,"% (",round(SE(prev),4)[3]*100,"%)"),
+    N01 = tab[1,2],
+    POP01 = paste0(tots[2]," (",round(SE(tots),0)[2],")"),
+    PREV01 = paste0(prev[2]*100,"% (",round(SE(prev),4)[2]*100,"%)"),
+    N00 = tab[1,1],
+    POP00 = paste0(tots[1]," (",round(SE(tots),0),")"),
+    PREV00 = paste0(prev[1]*100,"% (",round(SE(prev),4)[1]*100,"%)")
+  )[1,]
+}
+
+table(combined_clean$id_, combined_clean$cog)
+id_cog_pop  <- svytotal(~id_cog, design = svydes_proxy)
+id_cog_prev <- svymean(~id_cog, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog), round(id_cog_pop,0), round(id_cog_prev,4))
+```
+
+```{r}
+table(combined_clean$id_, combined_clean$self)
+id_self_pop  <- svytotal(~id_self, design = svydes_proxy)
+id_self_prev <- svymean(~id_self, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$self), round(id_self_pop,0), round(id_self_prev,4))
+```
+
+```{r}
+table(combined_clean$id_, combined_clean$ind)
+id_ind_pop  <- svytotal(~id_ind, design = svydes_proxy)
+id_ind_prev <- svymean(~id_ind, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$ind), round(id_ind_pop,0), round(id_ind_prev,4))
+```
+
+```{r}
+id_cog.self_pop  <- svytotal(~id_cog.self, design = svydes_proxy)
+id_cog.self_prev <- svymean(~id_cog.self, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog.self), round(id_cog.self_pop,0), round(id_cog.self_prev,4))
+```
+
+```{r}
+id_cog.ind_pop  <- svytotal(~id_cog.ind, design = svydes_proxy)
+id_cog.ind_prev <- svymean(~id_cog.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog.ind), round(id_cog.ind_pop,0), round(id_cog.ind_prev,4))
+```
+
+```{r}
+id_cog.self.ind_pop  <- svytotal(~id_cog.self.ind, design = svydes_proxy)
+id_cog.self.ind_prev <- svymean(~id_cog.self.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog.self.ind), round(id_cog.self.ind_pop,0), round(id_cog.self.ind_prev,4))
+```
+
+```{r}
+id_cog.self.ind.lesshs_pop  <- svytotal(~id_cog.self.ind.lesshs, design = svydes_proxy)
+id_cog.self.ind.lesshs_prev <- svymean(~id_cog.self.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog.self.ind.lesshs), round(id_cog.self.ind.lesshs_pop,0), round(id_cog.self.ind.lesshs_prev,4))
+```
+
+```{r}
+id_cog.ind.lesshs_pop  <- svytotal(~id_cog.ind.lesshs, design = svydes_proxy)
+id_cog.ind.lesshs_prev <- svymean(~id_cog.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$id_, combined_clean$cog.ind.lesshs), round(id_cog.ind.lesshs_pop,0), round(id_cog.ind.lesshs_prev,4))
+```
+
+```{r}
+id_cog.self.lesshs_pop  <- svytotal(~id_cog.self.lesshs, design = svydes_proxy)
+id_cog.self.lesshs_prev <- svymean(~id_cog.self.lesshs, design = svydes_proxy)
+table(combined_clean$id_, combined_clean$cog.self.lesshs) 
+rowfunc(table(combined_clean$id_, combined_clean$cog.self.lesshs), round(id_cog.self.lesshs_pop,0), round(id_cog.self.lesshs_prev,4))
+```
+
+```{r}
+id_ind.lesshs_pop  <- svytotal(~id_ind.lesshs, design = svydes_proxy)
+id_ind.lesshs_prev <- svymean(~id_ind.lesshs, design = svydes_proxy)
+table(combined_clean$id_, combined_clean$ind.lesshs)
+rowfunc(table(combined_clean$id_, combined_clean$ind.lesshs), round(id_ind.lesshs_pop,0), round(id_ind.lesshs_prev,4))
+```
+
+```{r}
+id_self.ind.lesshs_pop  <- svytotal(~id_self.ind.lesshs, design = svydes_proxy)
+id_self.ind.lesshs_prev <- svymean(~id_self.ind.lesshs, design = svydes_proxy)
+table(combined_clean$id_, combined_clean$self.ind.lesshs) 
+rowfunc(table(combined_clean$id_, combined_clean$self.ind.lesshs), round(id_self.ind.lesshs_pop,0), round(id_self.ind.lesshs_prev,4))
+```
+
+## DD Pop and Prevalence 
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog)
+dd_cog_pop  <- svytotal(~dd_cog, design = svydes_proxy)
+dd_cog_prev <- svymean(~dd_cog, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog), round(dd_cog_pop,0), round(dd_cog_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.self)
+dd_cog.self_pop  <- svytotal(~dd_cog.self, design = svydes_proxy)
+dd_cog.self_prev <- svymean(~dd_cog.self, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.self), round(dd_cog.self_pop,0), round(dd_cog.self_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.ind)
+dd_cog.ind_pop  <- svytotal(~dd_cog.ind, design = svydes_proxy)
+dd_cog.ind_prev <- svymean(~dd_cog.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.ind), round(dd_cog.ind_pop,0), round(dd_cog.ind_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.self.ind)
+dd_cog.self.ind_pop  <- svytotal(~dd_cog.self.ind, design = svydes_proxy)
+dd_cog.self.ind_prev <- svymean(~dd_cog.self.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.self.ind), round(dd_cog.self.ind_pop,0), round(dd_cog.self.ind_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.self.ind.lesshs)
+dd_cog.self.ind.lesshs_pop  <- svytotal(~dd_cog.self.ind.lesshs, design = svydes_proxy)
+dd_cog.self.ind.lesshs_prev <- svymean(~dd_cog.self.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.self.ind.lesshs), round(dd_cog.self.ind.lesshs_pop,0), round(dd_cog.self.ind.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.ind.lesshs) 
+dd_cog.ind.lesshs_pop  <- svytotal(~dd_cog.ind.lesshs, design = svydes_proxy)
+dd_cog.ind.lesshs_prev <- svymean(~dd_cog.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.ind.lesshs), round(dd_cog.ind.lesshs_pop,0), round(dd_cog.ind.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$cog.self.lesshs) 
+dd_cog.self.lesshs_pop  <- svytotal(~dd_cog.self.lesshs, design = svydes_proxy)
+dd_cog.self.lesshs_prev <- svymean(~dd_cog.self.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$cog.self.lesshs), round(dd_cog.self.lesshs_pop,0), round(dd_cog.self.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$dd_, combined_clean$ind.lesshs) 
+dd_ind.lesshs_pop  <- svytotal(~dd_ind.lesshs, design = svydes_proxy)
+dd_ind.lesshs_prev <- svymean(~dd_ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$ind.lesshs), round(dd_ind.lesshs_pop,0), round(dd_ind.lesshs_prev,4))
+```
+```{r}
+table(combined_clean$dd_, combined_clean$self.ind.lesshs) 
+dd_self.ind.lesshs_pop  <- svytotal(~dd_self.ind.lesshs, design = svydes_proxy)
+dd_self.ind.lesshs_prev <- svymean(~dd_self.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$dd_, combined_clean$self.ind.lesshs), round(dd_self.ind.lesshs_pop,0), round(dd_self.ind.lesshs_prev,4))
+```
+
+## IDD Pop and Prevalence 
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog)
+idd_cog_pop  <- svytotal(~idd_cog, design = svydes_proxy)
+idd_cog_prev <- svymean(~idd_cog, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog), round(idd_cog_pop,0), round(idd_cog_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.self)
+idd_cog.self_pop  <- svytotal(~idd_cog.self, design = svydes_proxy)
+idd_cog.self_prev <- svymean(~idd_cog.self, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.self), round(idd_cog.self_pop,0), round(idd_cog.self_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.ind)
+idd_cog.ind_pop  <- svytotal(~idd_cog.ind, design = svydes_proxy)
+idd_cog.ind_prev <- svymean(~idd_cog.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.ind), round(idd_cog.ind_pop,0), round(idd_cog.ind_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.self.ind)
+idd_cog.self.ind_pop  <- svytotal(~idd_cog.self.ind, design = svydes_proxy)
+idd_cog.self.ind_prev <- svymean(~idd_cog.self.ind, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.self.ind), round(idd_cog.self.ind_pop,0), round(idd_cog.self.ind_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.self.ind.lesshs)
+idd_cog.self.ind.lesshs_pop  <- svytotal(~idd_cog.self.ind.lesshs, design = svydes_proxy)
+idd_cog.self.ind.lesshs_prev <- svymean(~idd_cog.self.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.self.ind.lesshs), round(idd_cog.self.ind.lesshs_pop,0), round(idd_cog.self.ind.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.ind.lesshs) 
+idd_cog.ind.lesshs_pop  <- svytotal(~idd_cog.ind.lesshs, design = svydes_proxy)
+idd_cog.ind.lesshs_prev <- svymean(~idd_cog.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.ind.lesshs), round(idd_cog.ind.lesshs_pop,0), round(idd_cog.ind.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$cog.self.lesshs) 
+idd_cog.self.lesshs_pop  <- svytotal(~idd_cog.self.lesshs, design = svydes_proxy)
+idd_cog.self.lesshs_prev <- svymean(~idd_cog.self.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$cog.self.lesshs), round(idd_cog.self.lesshs_pop,0), round(idd_cog.self.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$ind.lesshs) 
+idd_ind.lesshs_pop  <- svytotal(~idd_ind.lesshs, design = svydes_proxy)
+idd_ind.lesshs_prev <- svymean(~idd_ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$ind.lesshs), round(idd_ind.lesshs_pop,0), round(idd_ind.lesshs_prev,4))
+```
+
+```{r}
+table(combined_clean$idd_, combined_clean$self.ind.lesshs) 
+idd_self.ind.lesshs_pop  <- svytotal(~idd_self.ind.lesshs, design = svydes_proxy)
+idd_self.ind.lesshs_prev <- svymean(~idd_self.ind.lesshs, design = svydes_proxy)
+rowfunc(table(combined_clean$idd_, combined_clean$self.ind.lesshs), round(idd_self.ind.lesshs_pop,0), round(idd_self.ind.lesshs_prev,4))
+```
+
+
+# Kappa Agreement
+
+## Source: 
+https://search.r-project.org/CRAN/refmans/epiR/html/epi.kappa.html
+"
+Kappa is a measure of agreement beyond the level of agreement expected by chance alone. The observed agreement is the proportion of samples for which both methods (or observers) agree.
+
+The bias and prevalence adjusted kappa (Byrt et al. 1993) provides a measure of observed agreement, an index of the bias between observers, and an index of the differences between the overall proportion of ‘yes’ and ‘no’ assessments. Bias and prevalence adjusted kappa are only returned if the number of rows and columns of argument dat equal 2.
+
+Common interpretations for the kappa statistic are as follows: < 0.2 slight agreement, 0.2 - 0.4 fair agreement, 0.4 - 0.6 moderate agreement, 0.6 - 0.8 substantial agreement, > 0.8 almost perfect agreement (Sim and Wright, 2005).
+
+Confidence intervals for the proportion of observations where there is agreement are calculated using the exact method (Collett 1999).
+
+The argument alternative = "greater" tests the hypothesis that kappa is greater than 0.
+"
+
+## Source: 
+https://www.sciencedirect.com/science/article/pii/S0895435699001742#:~:text=The%20first%20paradox%20is%20shown,two%20observers%20in%20marginal%20proportions.
+
+"PABAK adjusts for these factors by assuming a 50% prevalence and no bias, which can lead to a higher kappa value. The standard kappa statistic can be misleading when prevalence is low or there is significant bias, as these factors can artificially decrease the kappa value. "
+
+"
+If the prevalence of a condition in the sample is very high or low, the kappa statistic can be artificially lowered, even if there is good agreement between raters. This is because the kappa statistic considers the amount of agreement expected by chance, and chance agreement is higher when prevalence is extreme. 
+"
+
+## ID and Cog, prev. and bias adjusted kappa
+
+```{r}
+id.x.cog <- table(combined_clean$id_, combined_clean$cog) %>% matrix(nrow = 2) 
+id.x.cog <- matrix(c(id.x.cog[2,2],id.x.cog[1,2],id.x.cog[2,1],id.x.cog[1,1]), nrow =2)
+
+id.x.cog.kappa <- epi.kappa(dat = id.x.cog, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.kappa$pabak # the prevalence and bias corrected kappa statistic and the lower and upper bounds of the confidence interval for the prevalence and bias corrected kappa statistic
+id.x.cog.kappa$kappa # the kappa statistic, the standard error of the kappa statistic and the lower and upper bounds of the confidence interval for the kappa statistic.
+```
+
+```{r}
+id.x.cog[1,1]*id.x.cog[2,2]/(id.x.cog[1,2]*id.x.cog[2,1])
+confusionMatrix(id.x.cog)
+```
+
+```{r}
+id.x.cog_wt <- matrix(round(c(id_cog_pop[4],id_cog_pop[2],id_cog_pop[3],id_cog_pop[1])), nrow = 2)
+
+id.x.cog_wt.kappa <- epi.kappa(dat = id.x.cog_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog_wt.kappa$pabak # the prevalence and bias corrected kappa statistic and the lower and upper bounds of the confidence interval for the prevalence and bias corrected kappa statistic
+id.x.cog_wt.kappa$kappa # the kappa statistic, the standard error of the kappa statistic and the lower and upper bounds of the confidence interval for the kappa statistic.
+```
+
+```{r}
+id.x.cog_wt[1,1]*id.x.cog_wt[2,2]/(id.x.cog_wt[1,2]*id.x.cog_wt[2,1])
+confusionMatrix(id.x.cog_wt)
+```
+
+## ID and Cog & Selfcare , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.self <- table(combined_clean$id_, combined_clean$cog.self) %>% matrix(nrow = 2) 
+id.x.cog.self <- matrix(c(id.x.cog.self[2,2],id.x.cog.self[1,2],id.x.cog.self[2,1],id.x.cog.self[1,1]), nrow =2)
+
+id.x.cog.self.kappa <- epi.kappa(dat = id.x.cog.self, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+
+id.x.cog.self.kappa$kappa
+id.x.cog.self.kappa$pabak 
+```
+
+```{r}
+id.x.cog.self[1,1]*id.x.cog.self[2,2]/(id.x.cog.self[1,2]*id.x.cog.self[2,1])
+confusionMatrix(id.x.cog.self)
+```
+
+```{r}
+id.x.cog.self_wt <- matrix(round(c(id_cog.self_pop[4],id_cog.self_pop[2],id_cog.self_pop[3],id_cog.self_pop[1])), nrow = 2)
+
+id.x.cog.self_wt.kappa <- epi.kappa(dat = id.x.cog.self_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self_wt.kappa$pabak 
+id.x.cog.self_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.self_wt[1,1]*id.x.cog.self_wt[2,2]/(id.x.cog.self_wt[1,2]*id.x.cog.self_wt[2,1])
+confusionMatrix(id.x.cog.self_wt)
+```
+
+## ID and Cog & Independent Living , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.ind <- table(combined_clean$id_, combined_clean$cog.ind) %>% matrix(nrow = 2) 
+id.x.cog.ind <- matrix(c(id.x.cog.ind[2,2],id.x.cog.ind[1,2],id.x.cog.ind[2,1],id.x.cog.ind[1,1]), nrow =2)
+
+id.x.cog.ind.kappa <- epi.kappa(dat = id.x.cog.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.ind.kappa$pabak 
+id.x.cog.ind.kappa$kappa
+```
+
+```{r}
+id.x.cog.ind[1,1]*id.x.cog.ind[2,2]/(id.x.cog.ind[1,2]*id.x.cog.ind[2,1])
+confusionMatrix(id.x.cog.ind)
+```
+
+```{r}
+id.x.cog.ind_wt <- matrix(round(c(id_cog.ind_pop[4],id_cog.ind_pop[2],id_cog.ind_pop[3],id_cog.ind_pop[1])), nrow = 2)
+
+id.x.cog.ind_wt.kappa <- epi.kappa(dat = id.x.cog.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.ind_wt.kappa$pabak 
+id.x.cog.ind_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.ind_wt[1,1]*id.x.cog.ind_wt[2,2]/(id.x.cog.ind_wt[1,2]*id.x.cog.ind_wt[2,1])
+confusionMatrix(id.x.cog.ind_wt)
+```
+
+## ID and Cog & (Selfcare | Independent Living) , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.self.ind <- table(combined_clean$id_, combined_clean$cog.self.ind) %>% matrix(nrow = 2) 
+id.x.cog.self.ind <- matrix(c(id.x.cog.self.ind[2,2],id.x.cog.self.ind[1,2],id.x.cog.self.ind[2,1],id.x.cog.self.ind[1,1]), nrow =2)
+
+id.x.cog.self.ind.kappa <- epi.kappa(dat = id.x.cog.self.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.ind.kappa$pabak 
+id.x.cog.self.ind.kappa$kappa
+```
+
+```{r}
+id.x.cog.self.ind[1,1]*id.x.cog.self.ind[2,2]/(id.x.cog.self.ind[1,2]*id.x.cog.self.ind[2,1])
+confusionMatrix(id.x.cog.self.ind)
+```
+
+```{r}
+id.x.cog.self.ind_wt <- matrix(round(c(id_cog.self.ind_pop[4],id_cog.self.ind_pop[2],id_cog.self.ind_pop[3],id_cog.self.ind_pop[1])), nrow = 2)
+
+id.x.cog.self.ind_wt.kappa <- epi.kappa(dat = id.x.cog.self.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.ind_wt.kappa$pabak 
+id.x.cog.self.ind_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.self.ind_wt[1,1]*id.x.cog.self.ind_wt[2,2]/(id.x.cog.self.ind_wt[1,2]*id.x.cog.self.ind_wt[2,1])
+confusionMatrix(id.x.cog.self.ind_wt)
+```
+
+## ID and Cog & (Selfcare | Independent Living) & Less than HS , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.self.ind.lesshs <- table(combined_clean$id_, combined_clean$cog.self.ind.lesshs) %>% matrix(nrow = 2) 
+id.x.cog.self.ind.lesshs <- matrix(c(id.x.cog.self.ind.lesshs[2,2],id.x.cog.self.ind.lesshs[1,2],id.x.cog.self.ind.lesshs[2,1],id.x.cog.self.ind.lesshs[1,1]), nrow =2)
+
+id.x.cog.self.ind.lesshs.kappa <- epi.kappa(dat = id.x.cog.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.ind.lesshs.kappa$pabak 
+id.x.cog.self.ind.lesshs.kappa$kappa
+```
+
+```{r}
+id.x.cog.self.ind.lesshs[1,1]*id.x.cog.self.ind.lesshs[2,2]/(id.x.cog.self.ind.lesshs[1,2]*id.x.cog.self.ind.lesshs[2,1])
+confusionMatrix(id.x.cog.self.ind.lesshs)
+```
+
+```{r}
+id.x.cog.self.ind.lesshs_wt <- matrix(round(c(id_cog.self.ind.lesshs_pop[4],id_cog.self.ind.lesshs_pop[2],id_cog.self.ind.lesshs_pop[3],id_cog.self.ind.lesshs_pop[1])), nrow = 2)
+
+id.x.cog.self.ind.lesshs_wt.kappa <- epi.kappa(dat = id.x.cog.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.ind.lesshs_wt.kappa$pabak 
+id.x.cog.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.self.ind.lesshs_wt[1,1]*id.x.cog.self.ind.lesshs_wt[2,2]/(id.x.cog.self.ind.lesshs_wt[1,2]*id.x.cog.self.ind.lesshs_wt[2,1])
+confusionMatrix(id.x.cog.self.ind.lesshs_wt)
+```
+
+## ID and Cog & Independent Living & Less than HS , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.ind.lesshs <- table(combined_clean$id_, combined_clean$cog.ind.lesshs) %>% matrix(nrow = 2) 
+id.x.cog.ind.lesshs <- matrix(c(id.x.cog.ind.lesshs[2,2],id.x.cog.ind.lesshs[1,2],id.x.cog.ind.lesshs[2,1],id.x.cog.ind.lesshs[1,1]), nrow =2)
+
+id.x.cog.ind.lesshs.kappa <- epi.kappa(dat = id.x.cog.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.ind.lesshs.kappa$pabak 
+id.x.cog.ind.lesshs.kappa$kappa
+```
+
+```{r}
+id.x.cog.ind.lesshs[1,1]*id.x.cog.ind.lesshs[2,2]/(id.x.cog.ind.lesshs[1,2]*id.x.cog.ind.lesshs[2,1])
+confusionMatrix(id.x.cog.ind.lesshs)
+```
+
+```{r}
+id.x.cog.ind.lesshs_wt <- matrix(round(c(id_cog.ind.lesshs_pop[4],id_cog.ind.lesshs_pop[2],id_cog.ind.lesshs_pop[3],id_cog.ind.lesshs_pop[1])), nrow = 2)
+
+id.x.cog.ind.lesshs_wt.kappa <- epi.kappa(dat = id.x.cog.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.ind.lesshs_wt.kappa$pabak 
+id.x.cog.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.ind.lesshs_wt[1,1]*id.x.cog.ind.lesshs_wt[2,2]/(id.x.cog.ind.lesshs_wt[1,2]*id.x.cog.ind.lesshs_wt[2,1])
+confusionMatrix(id.x.cog.ind.lesshs_wt)
+```
+
+## ID and Cog & Self-care & Less than HS , prev. and bias adjusted kappa
+
+```{r}
+id.x.cog.self.lesshs <- table(combined_clean$id_, combined_clean$cog.self.lesshs) %>% matrix(nrow = 2) 
+id.x.cog.self.lesshs <- matrix(c(id.x.cog.self.lesshs[2,2],id.x.cog.self.lesshs[1,2],id.x.cog.self.lesshs[2,1],id.x.cog.self.lesshs[1,1]), nrow =2)
+
+id.x.cog.self.lesshs.kappa <- epi.kappa(dat = id.x.cog.self.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.lesshs.kappa$pabak 
+id.x.cog.self.lesshs.kappa$kappa
+```
+
+```{r}
+id.x.cog.self.lesshs[1,1]*id.x.cog.self.lesshs[2,2]/(id.x.cog.self.lesshs[1,2]*id.x.cog.self.lesshs[2,1])
+confusionMatrix(id.x.cog.self.lesshs)
+```
+
+```{r}
+id.x.cog.self.lesshs_wt <- matrix(round(c(id_cog.self.lesshs_pop[4],id_cog.self.lesshs_pop[2],id_cog.self.lesshs_pop[3],id_cog.self.lesshs_pop[1])), nrow = 2)
+
+id.x.cog.self.lesshs_wt.kappa <- epi.kappa(dat = id.x.cog.self.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.cog.self.lesshs_wt.kappa$pabak 
+id.x.cog.self.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+id.x.cog.self.lesshs_wt[1,1]*id.x.cog.self.lesshs_wt[2,2]/(id.x.cog.self.lesshs_wt[1,2]*id.x.cog.self.lesshs_wt[2,1])
+confusionMatrix(id.x.cog.self.lesshs_wt)
+```
+
+
+## ID and Independent Living & Less than HS , prev. and bias adjusted kappa
+
+```{r}
+id.x.ind.lesshs <- table(combined_clean$id_, combined_clean$ind.lesshs) %>% matrix(nrow = 2) 
+id.x.ind.lesshs <- matrix(c(id.x.ind.lesshs[2,2],id.x.ind.lesshs[1,2],id.x.ind.lesshs[2,1],id.x.ind.lesshs[1,1]), nrow =2)
+
+id.x.ind.lesshs.kappa <- epi.kappa(dat = id.x.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.ind.lesshs.kappa$pabak 
+id.x.ind.lesshs.kappa$kappa
+```
+
+```{r}
+id.x.ind.lesshs[1,1]*id.x.ind.lesshs[2,2]/(id.x.ind.lesshs[1,2]*id.x.ind.lesshs[2,1])
+confusionMatrix(id.x.ind.lesshs)
+```
+
+```{r}
+id.x.ind.lesshs_wt <- matrix(round(c(id_ind.lesshs_pop[4],id_ind.lesshs_pop[2],id_ind.lesshs_pop[3],id_ind.lesshs_pop[1])), nrow = 2)
+
+id.x.ind.lesshs_wt.kappa <- epi.kappa(dat = id.x.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.ind.lesshs_wt.kappa$pabak 
+id.x.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+id.x.ind.lesshs_wt[1,1]*id.x.ind.lesshs_wt[2,2]/(id.x.ind.lesshs_wt[1,2]*id.x.ind.lesshs_wt[2,1])
+confusionMatrix(id.x.ind.lesshs_wt)
+```
+
+## ID and Self-care | Independent Living & Less than HS , prev. and bias adjusted kappa
+
+```{r}
+id.x.self.ind.lesshs <- table(combined_clean$id_, combined_clean$self.ind.lesshs) %>% matrix(nrow = 2) 
+id.x.self.ind.lesshs <- matrix(c(id.x.self.ind.lesshs[2,2],id.x.self.ind.lesshs[1,2],id.x.self.ind.lesshs[2,1],id.x.self.ind.lesshs[1,1]), nrow =2)
+
+id.x.self.ind.lesshs.kappa <- epi.kappa(dat = id.x.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.self.ind.lesshs.kappa$pabak 
+id.x.self.ind.lesshs.kappa$kappa
+```
+
+```{r}
+id.x.self.ind.lesshs[1,1]*id.x.self.ind.lesshs[2,2]/(id.x.self.ind.lesshs[1,2]*id.x.self.ind.lesshs[2,1])
+confusionMatrix(id.x.self.ind.lesshs)
+```
+
+```{r}
+id.x.self.ind.lesshs_wt <- matrix(round(c(id_self.ind.lesshs_pop[4],id_self.ind.lesshs_pop[2],id_self.ind.lesshs_pop[3],id_self.ind.lesshs_pop[1])), nrow = 2)
+
+id.x.self.ind.lesshs_wt.kappa <- epi.kappa(dat = id.x.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.self.ind.lesshs_wt.kappa$pabak 
+id.x.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+id.x.self.ind.lesshs_wt[1,1]*id.x.self.ind.lesshs_wt[2,2]/(id.x.self.ind.lesshs_wt[1,2]*id.x.self.ind.lesshs_wt[2,1])
+confusionMatrix(id.x.self.ind.lesshs_wt)
+```
+
+#############################################################
+#############################################################
+
+## DD and Cog, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog <- table(combined_clean$dd_, combined_clean$cog) %>% matrix(nrow = 2) 
+dd.x.cog <- matrix(c(dd.x.cog[2,2],dd.x.cog[1,2],dd.x.cog[2,1],dd.x.cog[1,1]), nrow =2)
+
+dd.x.cog.kappa <- epi.kappa(dat = dd.x.cog, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.kappa$pabak 
+dd.x.cog.kappa$kappa 
+```
+
+```{r}
+dd.x.cog[1,1]*dd.x.cog[2,2]/(dd.x.cog[1,2]*dd.x.cog[2,1])
+confusionMatrix(dd.x.cog)
+```
+
+```{r}
+dd.x.cog_wt <- matrix(round(c(dd_cog_pop[4],dd_cog_pop[2],dd_cog_pop[3],dd_cog_pop[1])), nrow = 2)
+
+dd.x.cog_wt.kappa <- epi.kappa(dat = dd.x.cog_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog_wt.kappa$pabak 
+dd.x.cog_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog_wt[1,1]*dd.x.cog_wt[2,2]/(dd.x.cog_wt[1,2]*dd.x.cog_wt[2,1])
+confusionMatrix(dd.x.cog_wt)
+```
+
+## DD and Cog & Self-care, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.self <- table(combined_clean$dd_, combined_clean$cog.self) %>% matrix(nrow = 2) 
+dd.x.cog.self <- matrix(c(dd.x.cog.self[2,2],dd.x.cog.self[1,2],dd.x.cog.self[2,1],dd.x.cog.self[1,1]), nrow =2)
+
+dd.x.cog.self.kappa <- epi.kappa(dat = dd.x.cog.self, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.kappa$pabak 
+dd.x.cog.self.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self[1,1]*dd.x.cog.self[2,2]/(dd.x.cog.self[1,2]*dd.x.cog.self[2,1])
+confusionMatrix(dd.x.cog.self)
+```
+
+```{r}
+dd.x.cog.self_wt <- matrix(round(c(dd_cog.self_pop[4],dd_cog.self_pop[2],dd_cog.self_pop[3],dd_cog.self_pop[1])), nrow = 2)
+
+dd.x.cog.self_wt.kappa <- epi.kappa(dat = dd.x.cog.self_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self_wt.kappa$pabak 
+dd.x.cog.self_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self_wt[1,1]*dd.x.cog.self_wt[2,2]/(dd.x.cog.self_wt[1,2]*dd.x.cog.self_wt[2,1])
+confusionMatrix(dd.x.cog.self_wt)
+```
+
+## DD and Cog & Independence Living, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.ind <- table(combined_clean$dd_, combined_clean$cog.ind) %>% matrix(nrow = 2) 
+dd.x.cog.ind <- matrix(c(dd.x.cog.ind[2,2],dd.x.cog.ind[1,2],dd.x.cog.ind[2,1],dd.x.cog.ind[1,1]), nrow =2)
+
+dd.x.cog.ind.kappa <- epi.kappa(dat = dd.x.cog.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.ind.kappa$pabak 
+dd.x.cog.ind.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.ind[1,1]*dd.x.cog.ind[2,2]/(dd.x.cog.ind[1,2]*dd.x.cog.ind[2,1])
+confusionMatrix(dd.x.cog.ind)
+```
+
+```{r}
+dd.x.cog.ind_wt <- matrix(round(c(dd_cog.ind_pop[4],dd_cog.ind_pop[2],dd_cog.ind_pop[3],dd_cog.ind_pop[1])), nrow = 2)
+
+dd.x.cog.ind_wt.kappa <- epi.kappa(dat = dd.x.cog.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.ind_wt.kappa$pabak 
+dd.x.cog.ind_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.ind_wt[1,1]*dd.x.cog.ind_wt[2,2]/(dd.x.cog.ind_wt[1,2]*dd.x.cog.ind_wt[2,1])
+confusionMatrix(dd.x.cog.ind_wt)
+```
+
+## DD and Cog & (Self-care  | Independence Living), prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.self.ind <- table(combined_clean$dd_, combined_clean$cog.self.ind) %>% matrix(nrow = 2) 
+dd.x.cog.self.ind <- matrix(c(dd.x.cog.self.ind[2,2],dd.x.cog.self.ind[1,2],dd.x.cog.self.ind[2,1],dd.x.cog.self.ind[1,1]), nrow =2)
+
+dd.x.cog.self.ind.kappa <- epi.kappa(dat = dd.x.cog.self.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.ind.kappa$pabak 
+dd.x.cog.self.ind.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.ind[1,1]*dd.x.cog.self.ind[2,2]/(dd.x.cog.self.ind[1,2]*dd.x.cog.self.ind[2,1])
+confusionMatrix(dd.x.cog.self.ind)
+```
+
+```{r}
+dd.x.cog.self.ind_wt <- matrix(round(c(dd_cog.self.ind_pop[4],dd_cog.self.ind_pop[2],dd_cog.self.ind_pop[3],dd_cog.self.ind_pop[1])), nrow = 2)
+
+dd.x.cog.self.ind_wt.kappa <- epi.kappa(dat = dd.x.cog.self.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.ind_wt.kappa$pabak 
+dd.x.cog.self.ind_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.ind_wt[1,1]*dd.x.cog.self.ind_wt[2,2]/(dd.x.cog.self.ind_wt[1,2]*dd.x.cog.self.ind_wt[2,1])
+confusionMatrix(dd.x.cog.self.ind_wt)
+```
+
+## DD and Cog & (Self-care  | Independence Living) & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.self.ind.lesshs <- table(combined_clean$dd_, combined_clean$cog.self.ind.lesshs) %>% matrix(nrow = 2) 
+dd.x.cog.self.ind.lesshs <- matrix(c(dd.x.cog.self.ind.lesshs[2,2],dd.x.cog.self.ind.lesshs[1,2],dd.x.cog.self.ind.lesshs[2,1],dd.x.cog.self.ind.lesshs[1,1]), nrow =2)
+
+dd.x.cog.self.ind.lesshs.kappa <- epi.kappa(dat = dd.x.cog.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.ind.lesshs.kappa$pabak 
+dd.x.cog.self.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.ind.lesshs[1,1]*dd.x.cog.self.ind.lesshs[2,2]/(dd.x.cog.self.ind.lesshs[1,2]*dd.x.cog.self.ind.lesshs[2,1])
+confusionMatrix(dd.x.cog.self.ind.lesshs)
+```
+
+```{r}
+dd.x.cog.self.ind.lesshs_wt <- matrix(round(c(dd_cog.self.ind.lesshs_pop[4],dd_cog.self.ind.lesshs_pop[2],dd_cog.self.ind.lesshs_pop[3],dd_cog.self.ind.lesshs_pop[1])), nrow = 2)
+
+dd.x.cog.self.ind.lesshs_wt.kappa <- epi.kappa(dat = dd.x.cog.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.ind.lesshs_wt.kappa$pabak 
+dd.x.cog.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.ind.lesshs_wt[1,1]*dd.x.cog.self.ind.lesshs_wt[2,2]/(dd.x.cog.self.ind.lesshs_wt[1,2]*dd.x.cog.self.ind.lesshs_wt[2,1])
+confusionMatrix(dd.x.cog.self.ind.lesshs_wt)
+```
+
+## DD and Independence Living & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+dd.x.ind.lesshs <- table(combined_clean$dd_, combined_clean$ind.lesshs) %>% matrix(nrow = 2) 
+dd.x.ind.lesshs <- matrix(c(dd.x.ind.lesshs[2,2],dd.x.ind.lesshs[1,2],dd.x.ind.lesshs[2,1],dd.x.ind.lesshs[1,1]), nrow =2)
+
+dd.x.ind.lesshs.kappa <- epi.kappa(dat = dd.x.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.ind.lesshs.kappa$pabak 
+dd.x.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+dd.x.ind.lesshs[1,1]*dd.x.ind.lesshs[2,2]/(dd.x.ind.lesshs[1,2]*dd.x.ind.lesshs[2,1])
+confusionMatrix(dd.x.ind.lesshs)
+```
+
+```{r}
+dd.x.ind.lesshs_wt <- matrix(round(c(dd_ind.lesshs_pop[4],dd_ind.lesshs_pop[2],dd_ind.lesshs_pop[3],dd_ind.lesshs_pop[1])), nrow = 2)
+
+dd.x.ind.lesshs_wt.kappa <- epi.kappa(dat = dd.x.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.ind.lesshs_wt.kappa$pabak 
+dd.x.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.ind.lesshs_wt[1,1]*dd.x.ind.lesshs_wt[2,2]/(dd.x.ind.lesshs_wt[1,2]*dd.x.ind.lesshs_wt[2,1])
+confusionMatrix(dd.x.ind.lesshs_wt)
+```
+
+## DD and (Self-care | Independence Living) & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+dd.x.self.ind.lesshs <- table(combined_clean$dd_, combined_clean$self.ind.lesshs) %>% matrix(nrow = 2) 
+dd.x.self.ind.lesshs <- matrix(c(dd.x.self.ind.lesshs[2,2],dd.x.self.ind.lesshs[1,2],dd.x.self.ind.lesshs[2,1],dd.x.self.ind.lesshs[1,1]), nrow =2)
+
+dd.x.self.ind.lesshs.kappa <- epi.kappa(dat = dd.x.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.self.ind.lesshs.kappa$pabak 
+dd.x.self.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+dd.x.self.ind.lesshs[1,1]*dd.x.self.ind.lesshs[2,2]/(dd.x.self.ind.lesshs[1,2]*dd.x.self.ind.lesshs[2,1])
+confusionMatrix(dd.x.self.ind.lesshs)
+```
+
+```{r}
+dd.x.self.ind.lesshs_wt <- matrix(round(c(dd_self.ind.lesshs_pop[4],dd_self.ind.lesshs_pop[2],dd_self.ind.lesshs_pop[3],dd_self.ind.lesshs_pop[1])), nrow = 2)
+
+dd.x.self.ind.lesshs_wt.kappa <- epi.kappa(dat = dd.x.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.self.ind.lesshs_wt.kappa$pabak 
+dd.x.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.self.ind.lesshs_wt[1,1]*dd.x.self.ind.lesshs_wt[2,2]/(dd.x.self.ind.lesshs_wt[1,2]*dd.x.self.ind.lesshs_wt[2,1])
+confusionMatrix(dd.x.self.ind.lesshs_wt)
+```
+
+## DD and Coginitive & Independence Living & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.ind.lesshs <- table(combined_clean$dd_, combined_clean$cog.ind.lesshs) %>% matrix(nrow = 2) 
+dd.x.cog.ind.lesshs <- matrix(c(dd.x.cog.ind.lesshs[2,2],dd.x.cog.ind.lesshs[1,2],dd.x.cog.ind.lesshs[2,1],dd.x.cog.ind.lesshs[1,1]), nrow =2)
+
+dd.x.cog.ind.lesshs.kappa <- epi.kappa(dat = dd.x.cog.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.ind.lesshs.kappa$pabak 
+dd.x.cog.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.ind.lesshs[1,1]*dd.x.cog.ind.lesshs[2,2]/(dd.x.cog.ind.lesshs[1,2]*dd.x.cog.ind.lesshs[2,1])
+confusionMatrix(dd.x.cog.ind.lesshs)
+```
+
+```{r}
+dd.x.cog.ind.lesshs_wt <- matrix(round(c(dd_cog.ind.lesshs_pop[4],dd_cog.ind.lesshs_pop[2],dd_cog.ind.lesshs_pop[3],dd_cog.ind.lesshs_pop[1])), nrow = 2)
+
+dd.x.cog.ind.lesshs_wt.kappa <- epi.kappa(dat = dd.x.cog.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.ind.lesshs_wt.kappa$pabak 
+dd.x.cog.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.ind.lesshs_wt[1,1]*dd.x.cog.ind.lesshs_wt[2,2]/(dd.x.cog.ind.lesshs_wt[1,2]*dd.x.cog.ind.lesshs_wt[2,1])
+confusionMatrix(dd.x.cog.ind.lesshs_wt)
+```
+
+## DD and Coginitive & Self-care & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+dd.x.cog.self.lesshs <- table(combined_clean$dd_, combined_clean$cog.self.lesshs) %>% matrix(nrow = 2) 
+dd.x.cog.self.lesshs <- matrix(c(dd.x.cog.self.lesshs[2,2],dd.x.cog.self.lesshs[1,2],dd.x.cog.self.lesshs[2,1],dd.x.cog.self.lesshs[1,1]), nrow =2)
+
+dd.x.cog.self.lesshs.kappa <- epi.kappa(dat = dd.x.cog.self.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.lesshs.kappa$pabak 
+dd.x.cog.self.lesshs.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.lesshs[1,1]*dd.x.cog.self.lesshs[2,2]/(dd.x.cog.self.lesshs[1,2]*dd.x.cog.self.lesshs[2,1])
+confusionMatrix(dd.x.cog.self.lesshs)
+```
+
+```{r}
+dd.x.cog.self.lesshs_wt <- matrix(round(c(dd_cog.self.lesshs_pop[4],dd_cog.self.lesshs_pop[2],dd_cog.self.lesshs_pop[3],dd_cog.self.lesshs_pop[1])), nrow = 2)
+
+dd.x.cog.self.lesshs_wt.kappa <- epi.kappa(dat = dd.x.cog.self.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.cog.self.lesshs_wt.kappa$pabak 
+dd.x.cog.self.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.cog.self.lesshs_wt[1,1]*dd.x.cog.self.lesshs_wt[2,2]/(dd.x.cog.self.lesshs_wt[1,2]*dd.x.cog.self.lesshs_wt[2,1])
+confusionMatrix(dd.x.cog.self.lesshs_wt)
+```
+
+#############################################################
+#############################################################
+
+## IDD and Cog, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog <- table(combined_clean$idd_, combined_clean$cog) %>% matrix(nrow = 2) 
+idd.x.cog <- matrix(c(idd.x.cog[2,2],idd.x.cog[1,2],idd.x.cog[2,1],idd.x.cog[1,1]), nrow =2)
+
+idd.x.cog.kappa <- epi.kappa(dat = idd.x.cog, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.kappa$pabak 
+idd.x.cog.kappa$kappa 
+```
+
+```{r}
+idd.x.cog[1,1]*idd.x.cog[2,2]/(idd.x.cog[1,2]*idd.x.cog[2,1])
+confusionMatrix(idd.x.cog)
+```
+
+```{r}
+idd.x.cog_wt <- matrix(round(c(idd_cog_pop[4],idd_cog_pop[2],idd_cog_pop[3],idd_cog_pop[1])), nrow = 2)
+
+idd.x.cog_wt.kappa <- epi.kappa(dat = idd.x.cog_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog_wt.kappa$pabak 
+idd.x.cog_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog_wt[1,1]*idd.x.cog_wt[2,2]/(idd.x.cog_wt[1,2]*idd.x.cog_wt[2,1])
+confusionMatrix(idd.x.cog_wt)
+```
+
+## IDD and Cog & Self-care, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.self <- table(combined_clean$idd_, combined_clean$cog.self) %>% matrix(nrow = 2) 
+idd.x.cog.self <- matrix(c(idd.x.cog.self[2,2],idd.x.cog.self[1,2],idd.x.cog.self[2,1],idd.x.cog.self[1,1]), nrow =2)
+
+idd.x.cog.self.kappa <- epi.kappa(dat = idd.x.cog.self, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.kappa$pabak 
+idd.x.cog.self.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self[1,1]*idd.x.cog.self[2,2]/(idd.x.cog.self[1,2]*idd.x.cog.self[2,1])
+confusionMatrix(idd.x.cog.self)
+```
+
+```{r}
+idd.x.cog.self_wt <- matrix(round(c(idd_cog.self_pop[4],idd_cog.self_pop[2],idd_cog.self_pop[3],idd_cog.self_pop[1])), nrow = 2)
+
+idd.x.cog.self_wt.kappa <- epi.kappa(dat = idd.x.cog.self_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self_wt.kappa$pabak 
+idd.x.cog.self_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self_wt[1,1]*idd.x.cog.self_wt[2,2]/(idd.x.cog.self_wt[1,2]*idd.x.cog.self_wt[2,1])
+confusionMatrix(idd.x.cog.self_wt)
+```
+
+## IDD and Cog & Independent Living, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.ind <- table(combined_clean$idd_, combined_clean$cog.ind) %>% matrix(nrow = 2) 
+idd.x.cog.ind <- matrix(c(idd.x.cog.ind[2,2],idd.x.cog.ind[1,2],idd.x.cog.ind[2,1],idd.x.cog.ind[1,1]), nrow =2)
+
+idd.x.cog.ind.kappa <- epi.kappa(dat = idd.x.cog.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.ind.kappa$pabak 
+idd.x.cog.ind.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.ind[1,1]*idd.x.cog.ind[2,2]/(idd.x.cog.ind[1,2]*idd.x.cog.ind[2,1])
+confusionMatrix(idd.x.cog.ind)
+```
+
+```{r}
+idd.x.cog.ind_wt <- matrix(round(c(idd_cog.ind_pop[4],idd_cog.ind_pop[2],idd_cog.ind_pop[3],idd_cog.ind_pop[1])), nrow = 2)
+
+idd.x.cog.ind_wt.kappa <- epi.kappa(dat = idd.x.cog.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.ind_wt.kappa$pabak 
+idd.x.cog.ind_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.ind_wt[1,1]*idd.x.cog.ind_wt[2,2]/(idd.x.cog.ind_wt[1,2]*idd.x.cog.ind_wt[2,1])
+confusionMatrix(idd.x.cog.ind_wt)
+```
+
+## IDD and Cog & (Self-care | Independent Living), prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.self.ind <- table(combined_clean$idd_, combined_clean$cog.self.ind) %>% matrix(nrow = 2) 
+idd.x.cog.self.ind <- matrix(c(idd.x.cog.self.ind[2,2],idd.x.cog.self.ind[1,2],idd.x.cog.self.ind[2,1],idd.x.cog.self.ind[1,1]), nrow =2)
+
+idd.x.cog.self.ind.kappa <- epi.kappa(dat = idd.x.cog.self.ind, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.ind.kappa$pabak 
+idd.x.cog.self.ind.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.ind[1,1]*idd.x.cog.self.ind[2,2]/(idd.x.cog.self.ind[1,2]*idd.x.cog.self.ind[2,1])
+confusionMatrix(idd.x.cog.self.ind)
+```
+
+```{r}
+idd.x.cog.self.ind_wt <- matrix(round(c(idd_cog.self.ind_pop[4],idd_cog.self.ind_pop[2],idd_cog.self.ind_pop[3],idd_cog.self.ind_pop[1])), nrow = 2)
+
+idd.x.cog.self.ind_wt.kappa <- epi.kappa(dat = idd.x.cog.self.ind_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.ind_wt.kappa$pabak 
+idd.x.cog.self.ind_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.ind_wt[1,1]*idd.x.cog.self.ind_wt[2,2]/(idd.x.cog.self.ind_wt[1,2]*idd.x.cog.self.ind_wt[2,1])
+confusionMatrix(idd.x.cog.self.ind_wt)
+```
+
+## IDD and Independent Living & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+idd.x.ind.lesshs <- table(combined_clean$idd_, combined_clean$ind.lesshs) %>% matrix(nrow = 2) 
+idd.x.ind.lesshs <- matrix(c(idd.x.ind.lesshs[2,2],idd.x.ind.lesshs[1,2],idd.x.ind.lesshs[2,1],idd.x.ind.lesshs[1,1]), nrow =2)
+
+idd.x.ind.lesshs.kappa <- epi.kappa(dat = idd.x.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.ind.lesshs.kappa$pabak 
+idd.x.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+idd.x.ind.lesshs[1,1]*idd.x.ind.lesshs[2,2]/(idd.x.ind.lesshs[1,2]*idd.x.ind.lesshs[2,1])
+confusionMatrix(idd.x.ind.lesshs)
+```
+
+```{r}
+idd.x.ind.lesshs_wt <- matrix(round(c(idd_ind.lesshs_pop[4],idd_ind.lesshs_pop[2],idd_ind.lesshs_pop[3],idd_ind.lesshs_pop[1])), nrow = 2)
+
+idd.x.ind.lesshs_wt.kappa <- epi.kappa(dat = idd.x.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.ind.lesshs_wt.kappa$pabak 
+idd.x.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.ind.lesshs_wt[1,1]*idd.x.ind.lesshs_wt[2,2]/(idd.x.ind.lesshs_wt[1,2]*idd.x.ind.lesshs_wt[2,1])
+confusionMatrix(idd.x.ind.lesshs_wt)
+```
+
+## IDD and (Self-care | Independent Living) & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+idd.x.self.ind.lesshs <- table(combined_clean$idd_, combined_clean$self.ind.lesshs) %>% matrix(nrow = 2) 
+idd.x.self.ind.lesshs <- matrix(c(idd.x.self.ind.lesshs[2,2],idd.x.self.ind.lesshs[1,2],idd.x.self.ind.lesshs[2,1],idd.x.self.ind.lesshs[1,1]), nrow =2)
+
+idd.x.self.ind.lesshs.kappa <- epi.kappa(dat = idd.x.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.self.ind.lesshs.kappa$pabak 
+idd.x.self.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+idd.x.self.ind.lesshs[1,1]*idd.x.self.ind.lesshs[2,2]/(idd.x.self.ind.lesshs[1,2]*idd.x.self.ind.lesshs[2,1])
+confusionMatrix(idd.x.self.ind.lesshs)
+```
+
+```{r}
+idd.x.self.ind.lesshs_wt <- matrix(round(c(idd_self.ind.lesshs_pop[4],idd_self.ind.lesshs_pop[2],idd_self.ind.lesshs_pop[3],idd_self.ind.lesshs_pop[1])), nrow = 2)
+
+idd.x.self.ind.lesshs_wt.kappa <- epi.kappa(dat = idd.x.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.self.ind.lesshs_wt.kappa$pabak 
+idd.x.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.self.ind.lesshs_wt[1,1]*idd.x.self.ind.lesshs_wt[2,2]/(idd.x.self.ind.lesshs_wt[1,2]*idd.x.self.ind.lesshs_wt[2,1])
+confusionMatrix(idd.x.self.ind.lesshs_wt)
+```
+
+## IDD and Cognitive Independent Living & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.ind.lesshs <- table(combined_clean$idd_, combined_clean$cog.ind.lesshs) %>% matrix(nrow = 2) 
+idd.x.cog.ind.lesshs <- matrix(c(idd.x.cog.ind.lesshs[2,2],idd.x.cog.ind.lesshs[1,2],idd.x.cog.ind.lesshs[2,1],idd.x.cog.ind.lesshs[1,1]), nrow =2)
+
+idd.x.cog.ind.lesshs.kappa <- epi.kappa(dat = idd.x.cog.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.ind.lesshs.kappa$pabak 
+idd.x.cog.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.ind.lesshs[1,1]*idd.x.cog.ind.lesshs[2,2]/(idd.x.cog.ind.lesshs[1,2]*idd.x.cog.ind.lesshs[2,1])
+confusionMatrix(idd.x.cog.ind.lesshs)
+```
+
+```{r}
+idd.x.cog.ind.lesshs_wt <- matrix(round(c(idd_cog.ind.lesshs_pop[4],idd_cog.ind.lesshs_pop[2],idd_cog.ind.lesshs_pop[3],idd_cog.ind.lesshs_pop[1])), nrow = 2)
+
+idd.x.cog.ind.lesshs_wt.kappa <- epi.kappa(dat = idd.x.cog.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.ind.lesshs_wt.kappa$pabak 
+idd.x.cog.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.ind.lesshs_wt[1,1]*idd.x.cog.ind.lesshs_wt[2,2]/(idd.x.cog.ind.lesshs_wt[1,2]*idd.x.cog.ind.lesshs_wt[2,1])
+confusionMatrix(idd.x.cog.ind.lesshs_wt)
+```
+
+## IDD and Cognitive Self-care & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.self.lesshs <- table(combined_clean$idd_, combined_clean$cog.self.lesshs) %>% matrix(nrow = 2) 
+idd.x.cog.self.lesshs <- matrix(c(idd.x.cog.self.lesshs[2,2],idd.x.cog.self.lesshs[1,2],idd.x.cog.self.lesshs[2,1],idd.x.cog.self.lesshs[1,1]), nrow =2)
+
+idd.x.cog.self.lesshs.kappa <- epi.kappa(dat = idd.x.cog.self.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.lesshs.kappa$pabak 
+idd.x.cog.self.lesshs.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.lesshs[1,1]*idd.x.cog.self.lesshs[2,2]/(idd.x.cog.self.lesshs[1,2]*idd.x.cog.self.lesshs[2,1])
+confusionMatrix(idd.x.cog.self.lesshs)
+```
+
+```{r}
+idd.x.cog.self.lesshs_wt <- matrix(round(c(idd_cog.self.lesshs_pop[4],idd_cog.self.lesshs_pop[2],idd_cog.self.lesshs_pop[3],idd_cog.self.lesshs_pop[1])), nrow = 2)
+
+idd.x.cog.self.lesshs_wt.kappa <- epi.kappa(dat = idd.x.cog.self.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.lesshs_wt.kappa$pabak 
+idd.x.cog.self.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.lesshs_wt[1,1]*idd.x.cog.self.lesshs_wt[2,2]/(idd.x.cog.self.lesshs_wt[1,2]*idd.x.cog.self.lesshs_wt[2,1])
+confusionMatrix(idd.x.cog.self.lesshs_wt)
+```
+
+## IDD and Cognitive & (Independent Living | Self-care) & Less than HS, prev. and bias adjusted kappa
+
+```{r}
+idd.x.cog.self.ind.lesshs <- table(combined_clean$idd_, combined_clean$cog.self.ind.lesshs) %>% matrix(nrow = 2) 
+idd.x.cog.self.ind.lesshs <- matrix(c(idd.x.cog.self.ind.lesshs[2,2],idd.x.cog.self.ind.lesshs[1,2],idd.x.cog.self.ind.lesshs[2,1],idd.x.cog.self.ind.lesshs[1,1]), nrow =2)
+
+idd.x.cog.self.ind.lesshs.kappa <- epi.kappa(dat = idd.x.cog.self.ind.lesshs, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.ind.lesshs.kappa$pabak 
+idd.x.cog.self.ind.lesshs.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.ind.lesshs[1,1]*idd.x.cog.self.ind.lesshs[2,2]/(idd.x.cog.self.ind.lesshs[1,2]*idd.x.cog.self.ind.lesshs[2,1])
+confusionMatrix(idd.x.cog.self.ind.lesshs)
+```
+
+```{r}
+idd.x.cog.self.ind.lesshs_wt <- matrix(round(c(idd_cog.self.ind.lesshs_pop[4],idd_cog.self.ind.lesshs_pop[2],idd_cog.self.ind.lesshs_pop[3],idd_cog.self.ind.lesshs_pop[1])), nrow = 2)
+
+idd.x.cog.self.ind.lesshs_wt.kappa <- epi.kappa(dat = idd.x.cog.self.ind.lesshs_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.cog.self.ind.lesshs_wt.kappa$pabak 
+idd.x.cog.self.ind.lesshs_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.cog.self.ind.lesshs_wt[1,1]*idd.x.cog.self.ind.lesshs_wt[2,2]/(idd.x.cog.self.ind.lesshs_wt[1,2]*idd.x.cog.self.ind.lesshs_wt[2,1])
+confusionMatrix(idd.x.cog.self.ind.lesshs_wt)
+```
+
+# ID model
+
+```{r}
+svydes_proxy
+
+id_mod <- svyglm(id_ ~ cog + ind + lesshs + 
+                cog*ind + cog*lesshs + ind*lesshs + cog*ind*lesshs,
+              family = quasibinomial,
+              design = svydes_proxy)
+summary(id_mod)
+tidy(id_mod, expo=TRUE, conf.int=TRUE)
+
+set.seed(0)
+id_pred_df <- data.frame(
+  dat = combined_clean %>% select(id_,cog,ind,lesshs,PSU,STRAT,WTFA_AFD),
+  id_mod_pred = predict(id_mod, type = "response", se = TRUE),
+  rnrml = rnorm(dim(combined_clean)[1]),
+  all1 = 1)
+
+id_pred_df <- id_pred_df %>% 
+  mutate(jitter = id_mod_pred.response + rnrml*id_mod_pred.SE)
+
+id_prop[2] # target
+id_roc <- roc(id_pred_df$dat.id_,id_pred_df$id_mod_pred.response)
+plot.roc(id_pred_df$dat.id_,id_pred_df$id_mod_pred.response)
+
+
+eps <- Inf
+cutoff <- sum(id_pred_df$dat.id_)/dim(combined_clean)[1] #unweighted prop
+prev_cutoff = 1
+
+while (eps > 1e-5){
+  id_pred_df <- id_pred_df %>%
+    mutate(new_pred = ifelse(jitter > cutoff, 1, 0))
+  svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = id_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+  prop_est <- svymean(~new_pred,svydes_mod)[1]
+  cutoff <- cutoff + cutoff*(prop_est-id_prop[2])/(prev_cutoff)
+  eps = abs(prop_est - id_prop[2])
+  print(eps)
+  prev_cutoff <- cutoff
+}
+
+
+
+id_table_prop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svymean) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+id_table_prop
+
+id_table_pop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+id_table_pop
+
+
+id_table_pop_total <- svyby(~all1, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = all1 - qnorm(.975)*se,
+         UCI = all1 + qnorm(0.975)*se)
+id_table_pop_total
+
+```
+
+
+## ID MODEL EVAL
+
+```{r}
+id.x.mod <- table(id_pred_df$dat.id_, id_pred_df$new_pred) %>% matrix(nrow = 2) 
+id.x.mod <- matrix(c(id.x.mod[2,2],id.x.mod[1,2],id.x.mod[2,1],id.x.mod[1,1]), nrow =2)
+
+id.x.mod.kappa <- epi.kappa(dat = id.x.mod, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.mod.kappa$pabak 
+id.x.mod.kappa$kappa 
+```
+
+```{r}
+id.x.mod[1,1]*id.x.mod[2,2]/(id.x.mod[1,2]*id.x.mod[2,1])
+confusionMatrix(id.x.mod)
+```
+
+```{r}
+
+id_pred_df <- id_pred_df %>%
+  mutate(id.x.new_pred = paste0(dat.id_,new_pred))
+
+svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = id_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+
+id.x.new_pred_pop  <- svytotal(~id.x.new_pred, design = svydes_mod)
+id.x.new_pred_prev <- svymean(~id.x.new_pred, design = svydes_mod)
+
+rowfunc(table(id_pred_df$dat.id_, id_pred_df$new_pred), round(id.x.new_pred_pop,0), round(id.x.new_pred_prev,4))
+```
+
+```{r}
+id.x.new_pred_wt <- matrix(round(c(id.x.new_pred_pop[4],id.x.new_pred_pop[2],id.x.new_pred_pop[3],id.x.new_pred_pop[1])), nrow = 2)
+
+id.x.new_pred_wt.kappa <- epi.kappa(dat = id.x.new_pred_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+id.x.new_pred_wt.kappa$pabak 
+id.x.new_pred_wt.kappa$kappa 
+```
+
+```{r}
+id.x.new_pred_wt[1,1]*id.x.new_pred_wt[2,2]/(id.x.new_pred_wt[1,2]*id.x.new_pred_wt[2,1])
+confusionMatrix(id.x.new_pred_wt)
+```
+
+# DD model
+
+```{r}
+dd_mod <- svyglm(dd_ ~ cog + ind + lesshs + 
+                cog*ind + cog*lesshs + ind*lesshs + cog*ind*lesshs,
+              family = quasibinomial,
+              design = svydes_proxy)
+summary(dd_mod)
+tidy(dd_mod, expo=TRUE, conf.int=TRUE)
+
+set.seed(0)
+dd_pred_df <- data.frame(
+  dat = combined_clean %>% select(dd_,cog,ind,lesshs,PSU,STRAT,WTFA_AFD),
+  dd_mod_pred = predict(dd_mod, type = "response", se = TRUE),
+  rnrml = rnorm(dim(combined_clean)[1]),
+  all1 = 1)
+
+dd_pred_df <- dd_pred_df %>% 
+  mutate(jitter = dd_mod_pred.response + rnrml*dd_mod_pred.SE)
+
+dd_prop[2] # target
+dd_roc <- roc(dd_pred_df$dat.dd_,dd_pred_df$dd_mod_pred.response)
+plot.roc(dd_pred_df$dat.dd_,dd_pred_df$dd_mod_pred.response)
+
+
+eps <- Inf
+cutoff <- sum(dd_pred_df$dat.dd_)/dim(combined_clean)[1] #unweighted prop
+prev_cutoff = 1
+
+while (eps > 1e-5){
+  dd_pred_df <- dd_pred_df %>%
+    mutate(new_pred = ifelse(jitter > cutoff, 1, 0))
+  svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = dd_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+  prop_est <- svymean(~new_pred,svydes_mod)[1]
+  cutoff <- cutoff + cutoff*(prop_est-dd_prop[2])/(prev_cutoff)
+  eps = abs(prop_est - dd_prop[2])
+  print(eps)
+  prev_cutoff <- cutoff
+}
+
+table(dd_pred_df$dat.dd_,dd_pred_df$new_pred)
+
+dd_table_prop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svymean) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+dd_table_prop
+
+dd_table_pop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+dd_table_pop
+
+
+dd_table_pop_total <- svyby(~all1, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = all1 - qnorm(.975)*se,
+         UCI = all1 + qnorm(0.975)*se)
+dd_table_pop_total
+```
+
+## DD MODEL EVAL
+
+```{r}
+dd.x.mod <- table(dd_pred_df$dat.dd_, dd_pred_df$new_pred) %>% matrix(nrow = 2) 
+dd.x.mod <- matrix(c(dd.x.mod[2,2],dd.x.mod[1,2],dd.x.mod[2,1],dd.x.mod[1,1]), nrow =2)
+
+dd.x.mod.kappa <- epi.kappa(dat = dd.x.mod, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.mod.kappa$pabak 
+dd.x.mod.kappa$kappa 
+```
+
+```{r}
+dd.x.mod[1,1]*dd.x.mod[2,2]/(dd.x.mod[1,2]*dd.x.mod[2,1])
+confusionMatrix(dd.x.mod)
+```
+
+```{r}
+table(dd_pred_df$dat.dd_, dd_pred_df$new_pred)
+dd_pred_df <- dd_pred_df %>%
+  mutate(dd.x.new_pred = paste0(dat.dd_,new_pred))
+
+svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = dd_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+
+dd.x.new_pred_pop  <- svytotal(~dd.x.new_pred, design = svydes_mod)
+dd.x.new_pred_prev <- svymean(~dd.x.new_pred, design = svydes_mod)
+
+rowfunc(table(dd_pred_df$dat.dd_, dd_pred_df$new_pred), round(dd.x.new_pred_pop,0), round(dd.x.new_pred_prev,4))
+```
+
+```{r}
+dd.x.new_pred_wt <- matrix(round(c(dd.x.new_pred_pop[4],dd.x.new_pred_pop[2],dd.x.new_pred_pop[3],dd.x.new_pred_pop[1])), nrow = 2)
+
+dd.x.new_pred_wt.kappa <- epi.kappa(dat = dd.x.new_pred_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+dd.x.new_pred_wt.kappa$pabak 
+dd.x.new_pred_wt.kappa$kappa 
+```
+
+```{r}
+dd.x.new_pred_wt[1,1]*dd.x.new_pred_wt[2,2]/(dd.x.new_pred_wt[1,2]*dd.x.new_pred_wt[2,1])
+confusionMatrix(dd.x.new_pred_wt)
+```
+
+# IDD model
+
+```{r}
+idd_mod <- svyglm(idd_ ~ cog + ind + lesshs + 
+                cog*ind + cog*lesshs + ind*lesshs + cog*ind*lesshs,
+              family = quasibinomial,
+              design = svydes_proxy)
+summary(idd_mod)
+tidy(idd_mod, expo=TRUE, conf.int=TRUE)
+
+set.seed(0)
+idd_pred_df <- data.frame(
+  dat = combined_clean %>% select(idd_,cog,ind,lesshs,PSU,STRAT,WTFA_AFD),
+  idd_mod_pred = predict(idd_mod, type = "response", se = TRUE),
+  rnrml = rnorm(dim(combined_clean)[1]),
+  all1 = 1)
+
+idd_pred_df <- idd_pred_df %>% 
+  mutate(jitter = idd_mod_pred.response + rnrml*idd_mod_pred.SE)
+
+idd_prop[2] # target
+idd_roc <- roc(idd_pred_df$dat.idd_,idd_pred_df$idd_mod_pred.response)
+plot.roc(idd_pred_df$dat.idd_,idd_pred_df$idd_mod_pred.response)
+
+
+eps <- Inf
+cutoff <- sum(idd_pred_df$dat.idd_)/dim(combined_clean)[1] #unweighted prop
+prev_cutoff = 1
+
+while (eps > 1e-5){
+  idd_pred_df <- idd_pred_df %>%
+    mutate(new_pred = ifelse(jitter > cutoff, 1, 0))
+  svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = idd_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+  prop_est <- svymean(~new_pred,svydes_mod)[1]
+  cutoff <- cutoff + cutoff*(prop_est-idd_prop[2])/(prev_cutoff)
+  eps = abs(prop_est - idd_prop[2])
+  print(eps)
+  prev_cutoff <- cutoff
+}
+
+table(idd_pred_df$dat.idd_,idd_pred_df$new_pred)
+
+idd_table_prop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svymean) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+idd_table_prop
+
+idd_table_pop <- svyby(~new_pred, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = new_pred - qnorm(.975)*se,
+         UCI = new_pred + qnorm(0.975)*se)
+idd_table_pop
+
+
+idd_table_pop_total <- svyby(~all1, by = ~dat.cog + dat.ind + dat.lesshs, design = svydes_mod, svytotal) %>%
+  mutate(LCI = all1 - qnorm(.975)*se,
+         UCI = all1 + qnorm(0.975)*se)
+idd_table_pop_total
+```
+
+## IDD MODEL EVAL
+
+```{r}
+idd.x.mod <- table(idd_pred_df$dat.idd_, idd_pred_df$new_pred) %>% matrix(nrow = 2) 
+idd.x.mod <- matrix(c(idd.x.mod[2,2],idd.x.mod[1,2],idd.x.mod[2,1],idd.x.mod[1,1]), nrow =2)
+
+idd.x.mod.kappa <- epi.kappa(dat = idd.x.mod, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.mod.kappa$pabak 
+idd.x.mod.kappa$kappa 
+```
+
+```{r}
+idd.x.mod[1,1]*idd.x.mod[2,2]/(idd.x.mod[1,2]*idd.x.mod[2,1])
+confusionMatrix(idd.x.mod)
+```
+
+```{r}
+table(idd_pred_df$dat.idd_, idd_pred_df$new_pred)
+idd_pred_df <- idd_pred_df %>%
+  mutate(idd.x.new_pred = paste0(dat.idd_,new_pred))
+
+svydes_mod <- survey::svydesign(ids = ~dat.PSU,
+                            data = idd_pred_df,
+                            strata = ~dat.STRAT,
+                            weights = ~dat.WTFA_AFD,
+                            nest = T)
+
+idd.x.new_pred_pop  <- svytotal(~idd.x.new_pred, design = svydes_mod)
+idd.x.new_pred_prev <- svymean(~idd.x.new_pred, design = svydes_mod)
+rowfunc(table(idd_pred_df$dat.idd_, idd_pred_df$new_pred), round(idd.x.new_pred_pop,0), round(idd.x.new_pred_prev,4))
+```
+
+```{r}
+idd.x.new_pred_wt <- matrix(round(c(idd.x.new_pred_pop[4],idd.x.new_pred_pop[2],idd.x.new_pred_pop[3],idd.x.new_pred_pop[1])), nrow = 2)
+
+idd.x.new_pred_wt.kappa <- epi.kappa(dat = idd.x.new_pred_wt, method = "fleiss", alternative = "two.sided", conf.level = 0.95)
+idd.x.new_pred_wt.kappa$pabak 
+idd.x.new_pred_wt.kappa$kappa 
+```
+
+```{r}
+idd.x.new_pred_wt[1,1]*idd.x.new_pred_wt[2,2]/(idd.x.new_pred_wt[1,2]*idd.x.new_pred_wt[2,1])
+confusionMatrix(idd.x.new_pred_wt)
+```
+
+# ACS Verification (2023)
+
+```{r}
+pa <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_pus/psam_pusa.sas7bdat")
+pb <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_pus/psam_pusb.sas7bdat")
+
+acs <- pa %>% rbind(pb)
+
+acs <- acs %>%
+  filter(AGEP >= 18 & AGEP <=64) %>%
+  mutate(dat.cog    = ifelse(is.na(DREM) | DREM == 2, 0, 1),
+         dat.ind    = ifelse(is.na(DOUT) | DOUT == 2, 0, 1),
+         dat.lesshs = ifelse(is.na(SCHL) | SCHL >= 16, 0, 1),
+         all1   = 1) 
+
+acs_des <- survey::svydesign(ids = ~SERIALNO,
+                             data = acs, type="Fay", rho = 0.5,
+                             weights = ~PWGTP, repweights = "PWGTP[0-9]+")
+
+tus2023 <-svyby(~all1,~dat.cog + dat.ind + dat.lesshs,design=acs_des,svytotal,na.rm=T) %>%
+  mutate(LCI = all1 - qnorm(.975)*se,
+         UCI = all1 + qnorm(0.975)*se)
+
+tus2023
+```
+
+```{r}
+pred_id2023 <- tus2023 %>% 
+  inner_join(id_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(id_pop = all1*new_pred,
+         se.id_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2))
+
+pred_id2023$id_pop %>% sum()
+pred_id2023$se.id_pop^2 %>% sum() %>% sqrt()
+
+pred_dd2023 <- tus2023 %>% 
+  inner_join(dd_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(dd_pop = all1*new_pred,
+         se.dd_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2))
+
+pred_dd2023$dd_pop %>% sum()
+pred_dd2023$se.dd_pop^2 %>% sum() %>% sqrt()
+
+
+pred_idd2023 <- tus2023 %>% 
+  inner_join(idd_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(idd_pop = all1*new_pred,
+         se.idd_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2))
+
+pred_idd2023$idd_pop %>% sum()
+pred_idd2023$se.idd_pop^2 %>% sum() %>% sqrt()
+```
+
+# ACS Verification (2017)
+
+```{r}
+pa <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_pus/psam_pusa.csv")
+pb <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_pus/psam_pusb.csv")
+
+acs <- pa %>% rbind(pb)
+
+acs <- acs %>%
+  filter(AGEP >= 18 & AGEP <=64) %>%
+  mutate(dat.cog    = ifelse(is.na(DREM) | DREM == 2, 0, 1),
+         dat.ind    = ifelse(is.na(DOUT) | DOUT == 2, 0, 1),
+         dat.lesshs = ifelse(is.na(SCHL) | SCHL >= 16, 0, 1),
+         all1   = 1) 
+
+acs_des <- survey::svydesign(ids = ~SERIALNO,
+                             data = acs, type="Fay", rho = 0.5,
+                             weights = ~PWGTP, repweights = "PWGTP[0-9]+")
+
+tus2017 <-svyby(~all1,~dat.cog + dat.ind + dat.lesshs,design=acs_des,svytotal,na.rm=T) %>%
+  mutate(LCI = all1 - qnorm(.975)*se,
+         UCI = all1 + qnorm(0.975)*se)
+
+tus2017
+
+total_pop <- svytotal(~all1, design=acs_des)
+```
+
+```{r}
+pred_id2017 <- tus2017 %>% 
+  inner_join(id_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(id_pop = all1*new_pred,
+         se.id_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2)) %>%
+  mutate(LCI = id_pop - qnorm(.975)*se.id_pop,
+         UCI = id_pop + qnorm(0.975)*se.id_pop)
+
+
+pred_id2017$id_pop %>% sum()
+pred_id2017$se.id_pop^2 %>% sum() %>% sqrt()
+
+# total
+tid <- (pred_id2017$id_pop %>% sum())/total_pop 
+tid.se <- sqrt( (pred_id2017$se.id_pop^2 %>% sum() %>% sqrt())^2/(pred_id2017$id_pop %>% sum())^2 * ((pred_id2017$id_pop %>% sum())/total_pop)^2 +
+      SE(total_pop)^2/(total_pop^2) * ((pred_id2017$id_pop %>% sum())/total_pop)^2
+    )
+
+tid + tid.se*qnorm(0.975)
+tid - tid.se*qnorm(0.975)
+
+pred_dd2017 <- tus2017 %>% 
+  inner_join(dd_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(dd_pop = all1*new_pred,
+         se.dd_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2))%>%
+  mutate(LCI = dd_pop - qnorm(.975)*se.dd_pop,
+         UCI = dd_pop + qnorm(0.975)*se.dd_pop)
+
+
+pred_dd2017$dd_pop %>% sum()
+pred_dd2017$se.dd_pop^2 %>% sum() %>% sqrt()
+
+# total
+tdd <- (pred_dd2017$dd_pop %>% sum())/total_pop 
+tdd.se <- sqrt( (pred_dd2017$se.dd_pop^2 %>% sum() %>% sqrt())^2/(pred_dd2017$dd_pop %>% sum())^2 * ((pred_dd2017$dd_pop %>% sum())/total_pop)^2 +
+      SE(total_pop)^2/(total_pop^2) * ((pred_dd2017$dd_pop %>% sum())/total_pop)^2
+    )
+
+tdd + tdd.se*qnorm(0.975)
+tdd - tdd.se*qnorm(0.975)
+
+pred_idd2017 <- tus2017 %>% 
+  inner_join(idd_table_prop, by = c("dat.cog","dat.ind","dat.lesshs"))%>%
+  mutate(idd_pop = all1*new_pred,
+         se.idd_pop = sqrt(se.x^2*se.y*2 + se.x^2*(new_pred)^2 + se.y^2*(all1)^2))%>%
+  mutate(LCI = idd_pop - qnorm(.975)*se.idd_pop,
+         UCI = idd_pop + qnorm(0.975)*se.idd_pop)
+
+
+pred_idd2017$idd_pop %>% sum()
+pred_idd2017$se.idd_pop^2 %>% sum() %>% sqrt()
+
+# total
+tidd <- (pred_idd2017$idd_pop %>% sum())/total_pop 
+tidd.se <- sqrt((pred_idd2017$se.idd_pop^2 %>% sum() %>% sqrt())^2/(pred_idd2017$idd_pop %>% sum())^2 * ((pred_idd2017$idd_pop %>% sum())/total_pop)^2 +
+      SE(total_pop)^2/(total_pop^2) * ((pred_idd2017$idd_pop %>% sum())/total_pop)^2
+    )
+
+tidd + tidd.se*qnorm(0.975)
+tidd - tidd.se*qnorm(0.975)
+```
+
+```{r}
+save.image(".RData")
+```

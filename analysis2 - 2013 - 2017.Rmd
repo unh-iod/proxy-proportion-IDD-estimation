@@ -56,7 +56,7 @@ for (yr in year){
 #load(".RData")
 ```
 
-# Person File:
+# Person File contents
 
 ## Intellectual Disability
 LAHCC7A: What conditions or health problems cause {person} limitations? 
@@ -101,7 +101,7 @@ of work they} can do because of a physical, mental or emotional problem?
 EDUC: What is the HIGHEST level of school {person has} completed or the highest degree {person has} received? Please tell
 me the number from the card. 
 
-# Unweighted Obs
+#Confirming varable availability
 
 ```{r}
 # Intellectual Disability
@@ -120,6 +120,8 @@ me the number from the card.
 # Strat
 #table(is.na(personsx$STRAT_P))
 ```
+
+# Prepare calculated values
 
 ```{r}
 # Clean the data
@@ -140,6 +142,8 @@ personsx_clean <- personsx %>%
 sum(is.na(personsx_clean$STRAT))
 ```
 
+#Get initial population / proportion estimtates
+
 ```{r}
 svydes <- survey::svydesign(ids = ~PSU,
                             data = personsx_clean,
@@ -157,19 +161,21 @@ idd_prev <- svymean(~idd_f, design = svydes)
 idd_pop  <- svytotal(~idd_f, design = svydes)
 ```
 
-# Functioning File:
+# Confirming variable availability
 
-## Intellectual Disability
+## Functioning File:
+
+### Intellectual Disability
 N/A
 
-## Developmental Disability
+### Developmental Disability
 N/A
 
-## Limiation
+### Limiation
 COG_SS: Do you have difficulty remembering or concentrating? Would you say no difficulty, some difficulty, a lot of difficulty, or
 are you unable to do this?
 
-## ADL
+### ADL
 UB_SS: Do you have difficulty with self-care, such as washing all over or dressing? Would you say no difficulty, some difficulty,
 a lot of difficulty, or are you unable to do this? 
 
@@ -270,6 +276,8 @@ combined_clean <- personsx_clean %>%
 #table(combined_clean$lesshs, combined_clean$SRVY_YR)
 ```
 
+# Compute population estimates
+
 ```{r}
 svydes_proxy <- survey::svydesign(ids = ~PSU,
                             data = combined_clean,
@@ -299,6 +307,8 @@ cog.self.ind.lesshs_pop  <- svytotal(~cog.self.ind.lesshs_f, design = svydes_pro
 
 ## ID Pop and Prevalence 
 
+ID cross cog
+
 ```{r}
 rowfunc <- function(tab,tots,prev){
   data.frame(
@@ -323,6 +333,8 @@ id_cog_prev <- svymean(~id_cog, design = svydes_proxy)
 rowfunc(table(combined_clean$id_, combined_clean$cog), round(id_cog_pop,0), round(id_cog_prev,4))
 ```
 
+id cross selfcare
+
 ```{r}
 table(combined_clean$id_, combined_clean$self)
 id_self_pop  <- svytotal(~id_self, design = svydes_proxy)
@@ -330,12 +342,16 @@ id_self_prev <- svymean(~id_self, design = svydes_proxy)
 rowfunc(table(combined_clean$id_, combined_clean$self), round(id_self_pop,0), round(id_self_prev,4))
 ```
 
+id cross indepenedent living...
+
 ```{r}
 table(combined_clean$id_, combined_clean$ind)
 id_ind_pop  <- svytotal(~id_ind, design = svydes_proxy)
 id_ind_prev <- svymean(~id_ind, design = svydes_proxy)
 rowfunc(table(combined_clean$id_, combined_clean$ind), round(id_ind_pop,0), round(id_ind_prev,4))
 ```
+
+etc.
 
 ```{r}
 id_cog.self_pop  <- svytotal(~id_cog.self, design = svydes_proxy)

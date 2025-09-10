@@ -12,7 +12,7 @@ The purpose of this project is to provide the disability research community with
 
 ### Dependencies
 
-* Developed in 4.5.1
+* Developed in R 4.5.1
 * Packages: 
 
 ```{r}

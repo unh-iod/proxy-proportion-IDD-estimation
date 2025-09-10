@@ -1670,10 +1670,16 @@ confusionMatrix(idd.x.new_pred_wt)
 pa <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_pus/psam_pusa.sas7bdat")
 pb <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_pus/psam_pusb.sas7bdat")
 
-acs <- pa %>% rbind(pb)
+ha <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_hus/psam_husa.sas7bdat")
+hb <- read_sas("../Data2 - Redo to clean it up/2023-1Year/sas_hus/psam_husb.sas7bdat")
+
+acs <- pa %>% rbind(pb) %>%
+  inner_join((ha %>% rbind(hb)) %>%
+               select(SERIALNO,TYPEHUGQ), by = "SERIALNO")
 
 acs <- acs %>%
   filter(AGEP >= 18 & AGEP <=64) %>%
+  filter(TYPEHUGQ %in% c(1,3)) %>%
   mutate(dat.cog    = ifelse(is.na(DREM) | DREM == 2, 0, 1),
          dat.ind    = ifelse(is.na(DOUT) | DOUT == 2, 0, 1),
          dat.lesshs = ifelse(is.na(SCHL) | SCHL >= 16, 0, 1),
@@ -1723,10 +1729,16 @@ pred_idd2023$se.idd_pop^2 %>% sum() %>% sqrt()
 pa <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_pus/psam_pusa.csv")
 pb <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_pus/psam_pusb.csv")
 
-acs <- pa %>% rbind(pb)
+ha <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_hus/psam_husa.csv")
+hb <- read.csv("../Data2 - Redo to clean it up/2017-1Year/csv_hus/psam_husb.csv")
+
+acs <- pa %>% rbind(pb) %>%
+  inner_join((ha %>% rbind(hb)) %>%
+               select(SERIALNO,TYPE), by = "SERIALNO")
 
 acs <- acs %>%
   filter(AGEP >= 18 & AGEP <=64) %>%
+  filter(TYPE %in% c(1,3)) %>%
   mutate(dat.cog    = ifelse(is.na(DREM) | DREM == 2, 0, 1),
          dat.ind    = ifelse(is.na(DOUT) | DOUT == 2, 0, 1),
          dat.lesshs = ifelse(is.na(SCHL) | SCHL >= 16, 0, 1),

@@ -12,15 +12,16 @@ library(writexl)
 ```
 
 ```{r}
-#acs5year <- read.csv("../Data2 - Redo to clean it up/2023-5Year/usa_00010.csv")
+acs5year <- read.csv("../Data2 - Redo to clean it up/2023-5Year/usa_00010.csv")
 
-#acs5year <- acs5year %>%
-#  mutate(SERIALNO = 1:length(acs5year$YEAR)) %>%
-#  filter(AGE >= 18 & AGE <= 64) %>%
-#  mutate(cog = ifelse(is.na(DIFFREM) | DIFFREM == 1, 0, 1),
-#         ind = ifelse(is.na(DIFFMOB) | DIFFMOB == 1, 0, 1),
-#         lesshs = ifelse(is.na(EDUCD) | EDUCD %in% c(62:999), 0, 1),
-#         all1 = 1)
+acs5year <- acs5year %>%
+  mutate(SERIALNO = 1:length(acs5year$YEAR)) %>%
+  filter(AGE >= 18 & AGE <= 64) %>%
+  filter(GQ %in% c(1,2,4,5,6)) %>%
+  mutate(cog = ifelse(is.na(DIFFREM) | DIFFREM == 1, 0, 1),
+         ind = ifelse(is.na(DIFFMOB) | DIFFMOB == 1, 0, 1),
+         lesshs = ifelse(is.na(EDUCD) | EDUCD %in% c(62:999), 0, 1),
+         all1 = 1)
 
 #state STATEFIP
 #pump  PUMA
@@ -29,27 +30,27 @@ library(writexl)
 
 #length(acs5year$SERIALNO %>% unique())
 
-#acs5des <- survey::svrepdesign(id = "SERIALNO",
-#                            data = acs5year,
-#                            type = "Fay", rho = 0.5,
-#                            weights = ~PERWT, repweights = "REPWTP[0-9]+")
+acs5des <- survey::svrepdesign(id = "SERIALNO",
+                            data = acs5year,
+                            type = "Fay", rho = 0.5,
+                            weights = ~PERWT, repweights = "REPWTP[0-9]+")
 
-#tpuma_pop <- svyby(~all1, by = ~STATEFIP + PUMA, design = acs5des, FUN = svytotal)
-#saveRDS(tpuma_pop,"tpuma_pop.RDS")
+tpuma_pop <- svyby(~all1, by = ~STATEFIP + PUMA, design = acs5des, FUN = svytotal)
+saveRDS(tpuma_pop,"tpuma_pop.RDS")
 
-#tpuma <- svyby(~all1, by = ~STATEFIP + PUMA + cog + ind + lesshs, design = acs5des, FUN = svytotal)
-#saveRDS(tpuma,"tpuma.RDS")
+tpuma <- svyby(~all1, by = ~STATEFIP + PUMA + cog + ind + lesshs, design = acs5des, FUN = svytotal)
+saveRDS(tpuma,"tpuma.RDS")
 
-#tstate_pop <- svyby(~all1, by = ~STATEFIP, design = acs5des, FUN = svytotal)
-#saveRDS(tstate_pop,"tstate_pop.RDS")
+tstate_pop <- svyby(~all1, by = ~STATEFIP, design = acs5des, FUN = svytotal)
+saveRDS(tstate_pop,"tstate_pop.RDS")
 
-#tstate <- svyby(~all1, by = ~STATEFIP + cog + ind + lesshs, design = acs5des, FUN = svytotal)
-#saveRDS(tstate,"tstate.RDS")
+tstate <- svyby(~all1, by = ~STATEFIP + cog + ind + lesshs, design = acs5des, FUN = svytotal)
+saveRDS(tstate,"tstate.RDS")
 
-#cpuma <- acs5year %>%
-#  group_by(STATEFIP,PUMA) %>%
-#  summarise(N = n())
-#saveRDS(cpuma,"cpuma.RDS")
+cpuma <- acs5year %>%
+  group_by(STATEFIP,PUMA) %>%
+  summarise(N = n())
+saveRDS(cpuma,"cpuma.RDS")
 ```
 
 ```{r}

@@ -27,8 +27,6 @@ library(broom)
 
 ## Authors
 
-Contributors names and contact info
-
 Stacia Kingsbury, Nate Thomas, and Andrew Houtenville
 
 ## Funding Acknowledgment

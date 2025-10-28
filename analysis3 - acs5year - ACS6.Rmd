@@ -531,3 +531,6 @@ state_final <- state_pops %>%
 state_final 
   bind_rows(county_final) %>% writexl::write_xlsx("county-appendix-a5-ACS6.xlsx")
 ```
+
+
+#######

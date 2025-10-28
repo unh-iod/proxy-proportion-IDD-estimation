@@ -1869,3 +1869,7 @@ tidd - tidd.se*qnorm(0.975)
 ```{r}
 save.image("ACS6-pred.RData")
 ```
+
+
+#######
+

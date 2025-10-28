@@ -20,6 +20,7 @@ acs5year <- acs5year %>%
   filter(GQ %in% c(1,2,4,5,6)) %>%
   mutate(cog = ifelse(is.na(DIFFREM) | DIFFREM == 1, 0, 1),
          ind = ifelse(is.na(DIFFMOB) | DIFFMOB == 1, 0, 1),
+         self = ifelse(is.na(DIFFCARE) | DIFFCARE == 1, 0, 1),
          lesshs = ifelse(is.na(EDUCD) | EDUCD %in% c(62:999), 0, 1),
          all1 = 1)
 
@@ -41,8 +42,8 @@ saveRDS(tpuma_pop,"tpuma_pop.RDS")
 tpuma_ind <- svyby(~all1, by = ~STATEFIP + PUMA + cog + ind + lesshs, design = acs5des, FUN = svytotal)
 saveRDS(tpuma_ind,"tpuma_ind.RDS")
 
-tpuma_self <- svyby(~all1, by = ~STATEFIP + PUMA + cog + self + lesshs, design = acs5des, FUN = svytotal)
-saveRDS(tpuma_ind,"tpuma_self.RDS")
+#tpuma_self <- svyby(~all1, by = ~STATEFIP + PUMA + cog + self + lesshs, design = acs5des, FUN = svytotal)
+#saveRDS(tpuma_ind,"tpuma_self.RDS")
 
 tstate_pop <- svyby(~all1, by = ~STATEFIP, design = acs5des, FUN = svytotal)
 saveRDS(tstate_pop,"tstate_pop.RDS")
@@ -60,8 +61,8 @@ saveRDS(cpuma,"cpuma.RDS")
 #load("ACS6-pred.RData")
 tpuma_ind <- readRDS("tpuma_ind.RDS") %>%
   rename(all1.se = se)
-tpuma_self <- readRDS("tpuma_self.RDS") %>%
-  rename(all1.se = se)
+#tpuma_self <- readRDS("tpuma_self.RDS") %>%
+#  rename(all1.se = se)
 tstate <- readRDS("tstate.RDS") %>%
   rename(all1.se = se)
 tpuma_pop <- readRDS("tpuma_pop.RDS") %>%
@@ -129,7 +130,9 @@ state <- inner_join(
          idd_pop = all1.x*idd_prop,
          idd_pop_se = sqrt(all1.se.x^2*idd_prop.se^2 + all1.se.x^2*(idd_prop)^2 + idd_prop.se^2*(all1.x)^2),
          )%>%
-  relocate(STATEFIP,contains("id_pop"),contains("dd_pop"),contains("idd_pop"))
+  relocate(STATEFIP,contains("id_pop"),
+           #contains("dd_pop"),
+           contains("idd_pop"))
 
 state_total <- state %>%
   select(STATEFIP,all1.y,all1.se.y) %>%
@@ -203,16 +206,16 @@ puma <- inner_join(
   ) %>%
   arrange(STATEFIP,PUMA) %>%
   mutate(id_pop  = all1.x*id_prop,
-         id_pop_se = sqrt(all1.se.x^2*id_prop.se^2 + all1.se.x^2*(id_prop)^2 + id_prop.se^2*(all1.x)^2),
+         id_pop_se = sqrt(se.x^2*id_prop.se^2 + se.x^2*(id_prop)^2 + id_prop.se^2*(all1.x)^2),
          #dd_pop  = all1.x*dd_prop,
-         #dd_pop_se = sqrt(all1.se.x^2*dd_prop.se^2 + all1.se.x^2*(dd_prop)^2 + dd_prop.se^2*(all1.x)^2),
+         #dd_pop_se = sqrt(se.x^2*dd_prop.se^2 + se.x^2*(dd_prop)^2 + dd_prop.se^2*(all1.x)^2),
          idd_pop = all1.x*idd_prop,
-         idd_pop_se = sqrt(all1.se.x^2*idd_prop.se^2 + all1.se.x^2*(idd_prop)^2 + idd_prop.se^2*(all1.x)^2),
+         idd_pop_se = sqrt(se.x^2*idd_prop.se^2 + se.x^2*(idd_prop)^2 + idd_prop.se^2*(all1.x)^2),
          )%>%
   relocate(STATEFIP,PUMA,contains("id_pop"),contains("dd_pop"),contains("idd_pop"))
 
 puma_total <- puma %>%
-  select(STATEFIP,PUMA,all1.y,all1.se.y,N) %>%
+  select(STATEFIP,PUMA,all1.y,se.y,N) %>%
   distinct()
 
 puma_pivot <- puma %>%
@@ -326,9 +329,9 @@ county_final <- county_pops %>%
          ratio_se = sqrt((alloc/afact2)^2*((alloc*(1-alloc)/N_effective)/alloc^2 + (afact2*(1-afact2)/N_effective)/afact2^2))) %>%
   filter(!is.nan(ratio)) %>%
   mutate(county_total = all1.y*ratio,
-         county_total_se = sqrt(all1.se.y^2*ratio_se^2 + all1.se.y^2*(ratio)^2 + ratio_se^2*(all1.y)^2),
+         county_total_se = sqrt(se.y^2*ratio_se^2 + se.y^2*(ratio)^2 + ratio_se^2*(all1.y)^2),
          county_id       = id_pop*ratio,
-         #county_id_se    = sqrt(id_pop_se^2*ratio_se^2 + id_pop_se^2*(ratio)^2 + ratio_se^2*(id_pop)^2),
+         county_id_se    = sqrt(id_pop_se^2*ratio_se^2 + id_pop_se^2*(ratio)^2 + ratio_se^2*(id_pop)^2),
          #county_dd       = dd_pop*ratio,
          #county_dd_se    = sqrt(dd_pop_se^2*ratio_se^2 + dd_pop_se^2*(ratio)^2 + ratio_se^2*(dd_pop)^2),
          county_idd      = idd_pop*ratio,
@@ -453,76 +456,78 @@ state_final <- state_pops %>%
   summarise(N = sum(N)) %>%
   mutate(STATEFIP = sprintf("%02d",STATEFIP)),
   by = c("STATEFIP")) %>%
-  select(stab,id_pop,id_pop_se,dd_pop,dd_pop_se,idd_pop,idd_pop_se,all1.y,all1.se.y) %>%
+  select(stab,id_pop,id_pop_se,
+         #dd_pop,dd_pop_se,
+         idd_pop,idd_pop_se,all1.y,all1.se.y) %>%
   distinct(stab, .keep_all = T) %>%
   rename(county_total = all1.y,
          county_total_se = all1.se.y,
          county_id = id_pop,
          county_id_se = id_pop_se,
-         county_dd = dd_pop,
-         county_dd_se = dd_pop_se,
+         #county_dd = dd_pop,
+         #county_dd_se = dd_pop_se,
          county_idd = idd_pop,
          county_idd_se = idd_pop_se) %>%
   mutate(COUNTYNAME = "_Total",
          county_id_prop     = county_id/county_total,
          county_id_prop_se  = sqrt((county_id/county_total)^2*(county_id_se^2/county_id^2 + county_total_se^2/county_total^2)),
-         county_dd_prop     = county_dd/county_total,
-         county_dd_prop_se  = sqrt((county_dd/county_total)^2*(county_dd_se^2/county_dd^2 + county_total_se^2/county_total^2)),
+         #county_dd_prop     = county_dd/county_total,
+         #county_dd_prop_se  = sqrt((county_dd/county_total)^2*(county_dd_se^2/county_dd^2 + county_total_se^2/county_total^2)),
          county_idd_prop    = county_idd/county_total,
          county_idd_prop_se = sqrt((county_idd/county_total)^2*(county_idd_se^2/county_idd^2 + county_total_se^2/county_total^2))) %>%
   mutate(county_total_y = county_total %>% custom_round_find(),
          county_id_y    = county_id %>% custom_round_find(),
-         county_dd_y    = county_dd %>% custom_round_find(),
+         #county_dd_y    = county_dd %>% custom_round_find(),
          county_idd_y   = county_idd %>% custom_round_find()) %>%
   mutate(county_id_propy    = county_id_prop %>% custom_round_find(),
-         county_dd_propy    = county_dd_prop %>% custom_round_find(),
+         #county_dd_propy    = county_dd_prop %>% custom_round_find(),
          county_idd_propy   = county_idd_prop %>% custom_round_find()) %>%
   mutate(county_total_rounded = county_total %>% custom_round1(county_total_y),
          county_id_rounded = county_id %>% custom_round1(county_id_y),
-         county_dd_rounded = county_dd %>% custom_round1(county_dd_y),
+         #county_dd_rounded = county_dd %>% custom_round1(county_dd_y),
          county_idd_rounded = county_idd %>% custom_round1(county_idd_y),
          county_id_prop_rounded = county_id_prop %>% custom_round1(county_id_propy),
-         county_dd_prop_rounded = county_dd_prop %>% custom_round1(county_dd_propy),
+         #county_dd_prop_rounded = county_dd_prop %>% custom_round1(county_dd_propy),
          county_idd_prop_rounded = county_idd_prop %>% custom_round1(county_idd_propy)) %>%
   mutate(county_total_LCI = (county_total + qnorm(0.025)*county_total_se),
          county_total_UCI = (county_total + qnorm(0.975)*county_total_se),
          county_id_LCI = (county_id + qnorm(0.025)*county_id_se),
          county_id_UCI = (county_id + qnorm(0.975)*county_id_se),
-         county_dd_LCI = (county_dd + qnorm(0.025)*county_dd_se),
-         county_dd_UCI = (county_dd + qnorm(0.975)*county_dd_se),
+         #county_dd_LCI = (county_dd + qnorm(0.025)*county_dd_se),
+         #county_dd_UCI = (county_dd + qnorm(0.975)*county_dd_se),
          county_idd_LCI = (county_idd + qnorm(0.025)*county_idd_se),
          county_idd_UCI = (county_idd + qnorm(0.975)*county_idd_se),
          county_id_prop_LCI = (county_id_prop + qnorm(0.025)*county_id_prop_se),
          county_id_prop_UCI = (county_id_prop + qnorm(0.975)*county_id_prop_se),
-         county_dd_prop_LCI = (county_dd_prop + qnorm(0.025)*county_dd_prop_se),
-         county_dd_prop_UCI = (county_dd_prop + qnorm(0.975)*county_dd_prop_se),
+         #county_dd_prop_LCI = (county_dd_prop + qnorm(0.025)*county_dd_prop_se),
+         #county_dd_prop_UCI = (county_dd_prop + qnorm(0.975)*county_dd_prop_se),
          county_idd_prop_LCI = (county_idd_prop + qnorm(0.025)*county_idd_prop_se),
          county_idd_prop_UCI = (county_idd_prop + qnorm(0.975)*county_idd_prop_se)) %>%
   mutate(county_total_LCI_rounded = county_total_LCI %>% custom_round1(county_total_y),
          county_total_UCI_rounded = county_total_UCI %>% custom_round1(county_total_y),
          county_id_LCI_rounded = county_id_LCI %>% custom_round1(county_id_y),
          county_id_UCI_rounded = county_id_UCI %>% custom_round1(county_id_y),
-         county_dd_LCI_rounded = county_dd_LCI %>% custom_round1(county_dd_y),
-         county_dd_UCI_rounded = county_dd_UCI %>% custom_round1(county_dd_y),
+         #county_dd_LCI_rounded = county_dd_LCI %>% custom_round1(county_dd_y),
+         #county_dd_UCI_rounded = county_dd_UCI %>% custom_round1(county_dd_y),
          county_idd_LCI_rounded = county_idd_LCI %>% custom_round1(county_idd_y),
          county_idd_UCI_rounded = county_idd_UCI %>% custom_round1(county_idd_y),
          county_id_prop_LCI_rounded = county_id_prop_LCI %>% custom_round1(county_id_propy),
          county_id_prop_UCI_rounded = county_id_prop_UCI %>% custom_round1(county_id_propy),
-         county_dd_prop_LCI_rounded = county_dd_prop_LCI %>% custom_round1(county_dd_propy),
-         county_dd_prop_UCI_rounded = county_dd_prop_UCI %>% custom_round1(county_dd_propy),
+         #county_dd_prop_LCI_rounded = county_dd_prop_LCI %>% custom_round1(county_dd_propy),
+         #county_dd_prop_UCI_rounded = county_dd_prop_UCI %>% custom_round1(county_dd_propy),
          county_idd_prop_LCI_rounded = county_idd_prop_LCI %>% custom_round1(county_idd_propy),
          county_idd_prop_UCI_rounded = county_idd_prop_UCI %>% custom_round1(county_idd_propy)) %>%
   select(stab,COUNTYNAME,
          county_total_rounded, county_total_LCI_rounded, county_total_UCI_rounded,
          county_id_rounded, county_id_LCI_rounded, county_id_UCI_rounded,
          county_id_prop_rounded, county_id_prop_LCI_rounded, county_id_prop_UCI_rounded,
-         county_dd_rounded, county_dd_LCI_rounded, county_dd_UCI_rounded,
-         county_dd_prop_rounded, county_dd_prop_LCI_rounded, county_dd_prop_UCI_rounded,
+         #county_dd_rounded, county_dd_LCI_rounded, county_dd_UCI_rounded,
+         #county_dd_prop_rounded, county_dd_prop_LCI_rounded, county_dd_prop_UCI_rounded,
          county_idd_rounded, county_idd_LCI_rounded, county_idd_UCI_rounded,
          county_idd_prop_rounded, county_idd_prop_LCI_rounded, county_idd_prop_UCI_rounded) 
 
 
 
-state_final %>%
+state_final 
   bind_rows(county_final) %>% writexl::write_xlsx("county-appendix-a5-ACS6.xlsx")
 ```
